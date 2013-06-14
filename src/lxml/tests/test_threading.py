@@ -307,7 +307,7 @@ class ThreadPipelineTestCase(HelperTestCase):
                 put(handle(get()))
 
     class ParseWorker(Worker):
-        XML = etree.XML
+        XML = staticmethod(etree.XML)
         def handle(self, xml):
             return self.XML(xml)
     class RotateWorker(Worker):
@@ -321,7 +321,7 @@ class ThreadPipelineTestCase(HelperTestCase):
             element[:] = element[::-1]
             return element
     class ParseAndExtendWorker(Worker):
-        XML = etree.XML
+        XML = staticmethod(etree.XML)
         def handle(self, element):
             element.extend(self.XML(self.xml))
             return element

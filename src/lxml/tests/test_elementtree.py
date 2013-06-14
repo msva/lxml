@@ -3928,7 +3928,9 @@ def test_suite():
         suite.addTests([unittest.makeSuite(ETreeTestCase)])
     if ElementTree:
         suite.addTests([unittest.makeSuite(ElementTreeTestCase)])
-    if cElementTree:
+    if cElementTree and cElementTree.Element is not ElementTree.Element:
+        # This suite fails on the second run.
+        # Test cElementTree, but only if it's distinct from ElementTree.
         suite.addTests([unittest.makeSuite(CElementTreeTestCase)])
     return suite
 

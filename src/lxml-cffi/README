@@ -1,0 +1,2 @@
+# This directory is not a standalone package, and has no __init__.py.
+# It is meant to be in the __path__ of the main lxml package.

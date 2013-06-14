@@ -65,6 +65,9 @@ class ETreeNamespaceClassesTestCase(HelperTestCase):
         self.assertEqual(el.bluff(), 'bluff')
         del el
 
+        # This is needed in pypy, to clear the object proxies
+        import gc;gc.collect()
+
         self.Namespace('ns11').update(maeh_dict)
         el = tree.getroot()
         self.assertTrue(hasattr(el, 'bluff'))

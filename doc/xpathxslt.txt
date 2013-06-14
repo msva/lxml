@@ -38,7 +38,7 @@ The usual setup procedure:
   ...        if isinstance(s, str): s = s.encode("UTF-8")
   ...        return BytesIO(s)
 
-  >>> try: unicode = __builtins__["unicode"]
+  >>> try: unicode = unicode
   ... except (NameError, KeyError): unicode = str
 
 

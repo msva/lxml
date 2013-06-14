@@ -1,0 +1,2860 @@
+import sys
+import re
+
+__MAX_LOG_SIZE = 100
+
+from . import python
+from .apihelpers import _assertValidNode, _assertValidDoc
+from .apihelpers import _xmlNameIsValid, _characterReferenceIsValid
+from .apihelpers import _utf8, funicode, _isString
+from .apihelpers import _tagValidOrRaise, _uriValidOrRaise, _htmlTagValidOrRaise, _documentOrRaise
+from .apihelpers import _isFullSlice, _findChildSlice, _replaceSlice, _deleteSlice
+from .apihelpers import _makeElement, _makeSubElement
+from .apihelpers import _moveTail
+from .apihelpers import _collectText, _removeText, _setNodeText, _setTailText
+from .apihelpers import _collectChildren, _namespacedName, _countElements
+from .apihelpers import _getAttributeValue, _setAttributeValue, _delAttribute
+from .apihelpers import _findChild, _appendChild, _getNsTag, _collectAttributes, _attributeValue
+from .apihelpers import _appendSibling, _prependSibling, _copyNonElementSiblings
+from .apihelpers import _searchNsByHref, _nextElement, _previousElement, _parentElement, _removeNode, _tagMatchesExactly, _mapTagsToQnameMatchArray, _resolveQNameText
+from .apihelpers import _findChildForwards, _findChildBackwards
+from .apihelpers import _encodeFilename, _decodeFilename
+from . import _elementpath
+from .xmlerror import _initThreadLogging, clear_error_log
+from .includes import xmlparser
+from .includes import tree
+
+ITER_EMPTY = iter(())
+
+# A struct to store a cached qualified tag name+href pair.
+# While we can borrow the c_name from the document dict,
+# PyPy requires us to store a Python reference for the
+# namespace in order to keep the byte buffer alive.
+class qname:
+    pass
+
+# global per-thread setup
+tree.xmlThrDefIndentTreeOutput(1)
+tree.xmlThrDefLineNumbersDefaultValue(1)
+
+_initThreadLogging()
+
+# initialize parser (and threading)
+xmlparser.xmlInitParser()
+
+EMPTY_READ_ONLY_DICT = dict()
+
+def NEW_ELEMENT(cls):
+    return object.__new__(cls)
+
+_DEFAULT_NAMESPACE_PREFIXES = {
+    b"http://www.w3.org/XML/1998/namespace": b'xml',
+    b"http://www.w3.org/1999/xhtml": b"html",
+    b"http://www.w3.org/1999/XSL/Transform": b"xsl",
+    b"http://www.w3.org/1999/02/22-rdf-syntax-ns#": b"rdf",
+    b"http://schemas.xmlsoap.org/wsdl/": b"wsdl",
+    # xml schema
+    b"http://www.w3.org/2001/XMLSchema": b"xs",
+    b"http://www.w3.org/2001/XMLSchema-instance": b"xsi",
+    # dublin core
+    b"http://purl.org/dc/elements/1.1/": b"dc",
+    # objectify
+    b"http://codespeak.net/lxml/objectify/pytype" : b"py",
+}
+
+_check_internal_prefix = re.compile(b"ns\d+$").match
+
+def register_namespace(prefix, uri):
+    u"""Registers a namespace prefix that newly created Elements in that
+    namespace will use.  The registry is global, and any existing
+    mapping for either the given prefix or the namespace URI will be
+    removed.
+    """
+    prefix_utf, uri_utf = _utf8(prefix), _utf8(uri)
+    if _check_internal_prefix(prefix_utf):
+        raise ValueError("Prefix format reserved for internal use")
+    _tagValidOrRaise(prefix_utf)
+    _uriValidOrRaise(uri_utf)
+    for k, v in list(_DEFAULT_NAMESPACE_PREFIXES.items()):
+        if k == uri_utf or v == prefix_utf:
+            del _DEFAULT_NAMESPACE_PREFIXES[k]
+    _DEFAULT_NAMESPACE_PREFIXES[uri_utf] = prefix_utf
+
+
+# Error superclass for ElementTree compatibility
+class Error(Exception):
+    pass
+
+_Error = Error
+
+# module level superclass for all exceptions
+class LxmlError(Error):
+    u"""Main exception base class for lxml.  All other exceptions inherit from
+    this one.
+    """
+    def __init__(self, message, error_log=None):
+        from .xmlerror import _copyGlobalErrorLog
+
+        if python.PY_VERSION_HEX >= 0x02050000:
+            # Python >= 2.5 uses new style class exceptions
+            super(_Error, self).__init__(message)
+        else:
+            error_super_init(self, message)
+        if error_log is None:
+            self.error_log = _copyGlobalErrorLog()
+        else:
+            self.error_log = error_log.copy()
+
+# superclass for all syntax errors
+class LxmlSyntaxError(LxmlError, SyntaxError):
+    u"""Base class for all syntax errors.
+    """
+    pass
+
+# class for temporary storage of Python references,
+# used e.g. for XPath results
+class _TempStore:
+    def __init__(self):
+        self._storage = []
+
+    def add(self, obj):
+        self._storage.append(obj)
+
+    def clear(self):
+        del self._storage[:]
+
+
+# class for temporarily storing exceptions raised in extensions
+class _ExceptionContext:
+    _exc_info = None
+
+    def clear(self):
+        self._exc_info = None
+
+    def _store_raised(self):
+        self._exc_info = sys.exc_info()
+
+    def _store_exception(self, exception):
+        self._exc_info = (exception, None, None)
+
+    def _has_raised(self):
+        return self._exc_info is not None
+
+    def _raise_if_stored(self):
+        if self._exc_info is None:
+            return 0
+        type, value, traceback = self._exc_info
+        self._exc_info = None
+        if value is None and traceback is None:
+            raise type
+        else:
+            raise type, value, traceback
+
+# version information
+def __unpackDottedVersion(version):
+    version_list = []
+    l = (version.decode("ascii").replace(u'-', u'.').split(u'.') + [0]*4)[:4]
+    for item in l:
+        try:
+            item = int(item)
+        except ValueError:
+            if item.startswith(u'dev'):
+                count = item[3:]
+                item = -300
+            elif item.startswith(u'alpha'):
+                count = item[5:]
+                item = -200
+            elif item.startswith(u'beta'):
+                count = item[4:]
+                item = -100
+            else:
+                count = 0
+            if count:
+                item += int(count)
+        version_list.append(item)
+    return tuple(version_list)
+
+def __unpackIntVersion(c_version):
+    return (
+        ((c_version / (100*100)) % 100),
+        ((c_version / 100)       % 100),
+        (c_version               % 100)
+        )
+
+from .includes.etree_defs import _isElement
+from .includes.etree_defs import FOR_EACH_ELEMENT_FROM
+
+try:
+    _LIBXML_VERSION_INT = int(
+        re.match(u'[0-9]+', tree.ffi.string(tree.xmlParserVersion).decode("ascii")).group(0))
+except Exception:
+    print u"Unknown libxml2 version: %s" % tree.ffi.string(tree.xmlParserVersion).decode("ascii")
+    _LIBXML_VERSION_INT = 0
+
+LXML_VERSION = __unpackDottedVersion(tree.LXML_VERSION_STRING)
+LIBXML_COMPILED_VERSION = __unpackIntVersion(tree.LIBXML_VERSION)
+LIBXML_VERSION = __unpackIntVersion(_LIBXML_VERSION_INT)
+
+__version__ = tree.LXML_VERSION_STRING.decode("ascii")
+
+################################################################################
+# Public Python API
+
+class _Document(object):
+    def __del__(self):
+        tree.xmlFreeDoc(self._c_doc)
+
+    def getroot(self):
+        # return an element proxy for the document root
+        c_node = tree.xmlDocGetRootElement(self._c_doc)
+        if not c_node:
+            return None
+        return _elementFactory(self, c_node)
+
+    def hasdoctype(self):
+        # DOCTYPE gets parsed into internal subset (xmlDTD*)
+        return self._c_doc and self._c_doc.intSubset
+
+    def getdoctype(self):
+        # get doctype info: root tag, public/system ID (or None if not known)
+        public_id = None
+        sys_url   = None
+        c_dtd = self._c_doc.intSubset
+        if c_dtd:
+            if c_dtd.ExternalID:
+                public_id = funicode(c_dtd.ExternalID)
+            if c_dtd.SystemID:
+                sys_url = funicode(c_dtd.SystemID)
+        c_dtd = self._c_doc.extSubset
+        if c_dtd:
+            if not public_id and c_dtd.ExternalID:
+                public_id = funicode(c_dtd.ExternalID)
+            if not sys_url and c_dtd.SystemID:
+                sys_url = funicode(c_dtd.SystemID)
+        c_root_node = tree.xmlDocGetRootElement(self._c_doc)
+        if not c_root_node:
+            root_name = None
+        else:
+            root_name = funicode(c_root_node.name)
+        return (root_name, public_id, sys_url)
+
+    def getxmlinfo(self):
+        # return XML version and encoding (or None if not known)
+        c_doc = self._c_doc
+        if not c_doc.version:
+            version = None
+        else:
+            version = funicode(c_doc.version)
+        if not c_doc.encoding:
+            encoding = None
+        else:
+            encoding = funicode(c_doc.encoding)
+        return (version, encoding)
+
+    def isstandalone(self):
+        # returns True for "standalone=true",
+        # False for "standalone=false", None if not provided
+        if self._c_doc.standalone == -1:
+            return None
+        else:
+            return self._c_doc.standalone == 1
+
+    def buildNewPrefix(self):
+        # get a new unique prefix ("nsX") for this document
+        if self._ns_counter < len(_PREFIX_CACHE):
+            ns = _PREFIX_CACHE[self._ns_counter]
+        else:
+            ns = ("ns%d" % (self._ns_counter)).encode()
+        if self._prefix_tail is not None:
+            ns += self._prefix_tail
+        self._ns_counter += 1
+        if self._ns_counter < 0:
+            # overflow!
+            self._ns_counter = 0
+            if self._prefix_tail is None:
+                self._prefix_tail = b"A"
+            else:
+                self._prefix_tail += b"A"
+        return ns
+
+    def _findOrBuildNodeNs(self, c_node,
+                           c_href, c_prefix,
+                           is_attribute):
+        u"""Get or create namespace structure for a node.  Reuses the prefix if
+        possible.
+        """
+        assert isinstance(c_href, bytes)
+        if c_node.type != tree.XML_ELEMENT_NODE:
+            assert c_node.type == tree.XML_ELEMENT_NODE, \
+                u"invalid node type %d, expected %d" % (
+                c_node.type, tree.XML_ELEMENT_NODE)
+        # look for existing ns declaration
+        c_ns = _searchNsByHref(c_node, c_href, is_attribute)
+        if c_ns:
+            if is_attribute and not c_ns.prefix:
+                # do not put namespaced attributes into the default
+                # namespace as this would break serialisation
+                pass
+            else:
+                return c_ns
+
+        # none found => determine a suitable new prefix
+        if not c_prefix:
+            try:
+                dict_result = python.PyDict_GetItem(
+                    _DEFAULT_NAMESPACE_PREFIXES, c_href)
+            except KeyError:
+                prefix = self.buildNewPrefix()
+            else:
+                prefix = dict_result
+            c_prefix = prefix
+
+        # make sure the prefix is not in use already
+        while tree.xmlSearchNs(self._c_doc, c_node, c_prefix):
+            prefix = self.buildNewPrefix()
+            c_prefix = prefix
+
+        # declare the namespace and return it
+        c_ns = tree.xmlNewNs(c_node, c_href, c_prefix)
+        if not c_ns:
+            python.PyErr_NoMemory()
+        return c_ns
+
+    def _setNodeNs(self, c_node, href):
+        u"Lookup namespace structure and set it for the node."
+        c_ns = self._findOrBuildNodeNs(c_node, href, tree.ffi.NULL, 0)
+        tree.xmlSetNs(c_node, c_ns)
+
+_PREFIX_CACHE = tuple(("ns%d" % i).encode() for i in range(30))
+
+
+def _documentFactory(c_doc, parser):
+    result = _Document.__new__(_Document)
+    result._c_doc = c_doc
+    result._ns_counter = 0
+    result._prefix_tail = None
+    if parser is None:
+        from .parser import _GLOBAL_PARSER_CONTEXT
+        parser = _GLOBAL_PARSER_CONTEXT.getDefaultParser()
+    result._parser = parser
+    return result
+
+class DocInfo:
+    u"Document information provided by parser and DTD."
+    def __init__(self, tree):
+        u"Create a DocInfo object for an ElementTree object or root Element."
+        self._doc = _documentOrRaise(tree)
+        root_name, public_id, system_url = self._doc.getdoctype()
+        if not root_name and (public_id or system_url):
+            raise ValueError, u"Could not find root node"
+
+    @property
+    def root_name(self):
+        u"Returns the name of the root node as defined by the DOCTYPE."
+        root_name, public_id, system_url = self._doc.getdoctype()
+        return root_name
+
+    @property
+    def public_id(self):
+        u"Returns the public ID of the DOCTYPE."
+        root_name, public_id, system_url = self._doc.getdoctype()
+        return public_id
+
+    @property
+    def system_url(self):
+        u"Returns the system ID of the DOCTYPE."
+        root_name, public_id, system_url = self._doc.getdoctype()
+        return system_url
+
+    @property
+    def xml_version(self):
+        u"Returns the XML version as declared by the document."
+        xml_version, encoding = self._doc.getxmlinfo()
+        return xml_version
+
+    @property
+    def encoding(self):
+        u"Returns the encoding name as declared by the document."
+        xml_version, encoding = self._doc.getxmlinfo()
+        return encoding
+
+    @property
+    def standalone(self):
+        u"""Returns the standalone flag as declared by the document.  The possible
+        values are True (``standalone='yes'``), False
+        (``standalone='no'`` or flag not provided in the declaration),
+        and None (unknown or no declaration found).  Note that a
+        normal truth test on this value will always tell if the
+        ``standalone`` flag was set to ``'yes'`` or not.
+        """
+        return self._doc.isstandalone()
+
+    @property
+    def URL(self):
+        u"The source URL of the document (or None if unknown)."
+        if not self._doc._c_doc.URL:
+            return None
+        return _decodeFilename(tree.ffi.string(self._doc._c_doc.URL))
+    @URL.setter
+    def URL(self, url):
+        url = _encodeFilename(url)
+        c_oldurl = self._doc._c_doc.URL
+        if url is None:
+            self._doc._c_doc.URL = tree.ffi.NULL
+        else:
+            self._doc._c_doc.URL = tree.xmlStrdup(url)
+        if c_oldurl:
+            tree.xmlFree(c_oldurl)
+
+    @property
+    def doctype(self):
+        u"Returns a DOCTYPE declaration string for the document."
+        root_name, public_id, system_url = self._doc.getdoctype()
+        if public_id:
+            if system_url:
+                return u'<!DOCTYPE %s PUBLIC "%s" "%s">' % (
+                    root_name, public_id, system_url)
+            else:
+                return u'<!DOCTYPE %s PUBLIC "%s">' % (
+                    root_name, public_id)
+        elif system_url:
+            return u'<!DOCTYPE %s SYSTEM "%s">' % (
+                root_name, system_url)
+        elif self._doc.hasdoctype():
+            return u'<!DOCTYPE %s>' % root_name
+        else:
+            return u""
+
+    @property
+    def internalDTD(self):
+        u"Returns a DTD validator based on the internal subset of the document."
+        from .dtd import _dtdFactory
+        return _dtdFactory(self._doc._c_doc.intSubset)
+
+class _Element(object):
+    u"""Element class.
+
+    References a document object and a libxml node.
+
+    By pointing to a Document instance, a reference is kept to
+    _Document as long as there is some pointer to a node in it.
+    """
+    _c_node = tree.ffi.NULL
+    _tag = None
+
+    def _init(self):
+        u"""_init(self)
+
+        Called after object initialisation.  Custom subclasses may override
+        this if they recursively call _init() in the superclasses.
+        """
+
+    def __del__(self):
+        #print "trying to free node:", <int>self._c_node
+        #displayNode(self._c_node, 0)
+        if self._c_node:
+            _unregisterProxy(self)
+            attemptDeallocation(self._c_node)
+        _releaseProxy(self)
+
+    # MANIPULATORS
+
+    def __setitem__(self, x, value):
+        u"""__setitem__(self, x, value)
+
+        Replaces the given subelement index or slice.
+        """
+        c_node = tree.ffi.NULL
+        slicelength = 0
+        step = 0
+        _assertValidNode(self)
+        if value is None:
+            raise ValueError, u"cannot assign None"
+        if python.PySlice_Check(x):
+            # slice assignment
+            c_node, step, slicelength = _findChildSlice(x, self._c_node)
+            if step > 0:
+                left_to_right = 1
+            else:
+                left_to_right = 0
+                step = -step
+            _replaceSlice(self, c_node, slicelength, step, left_to_right, value)
+            return
+        else:
+            # otherwise: normal item assignment
+            element = value
+            _assertValidNode(element)
+            c_node = _findChild(self._c_node, x)
+            if not c_node:
+                raise IndexError, u"list index out of range"
+            c_source_doc = element._c_node.doc
+            c_next = element._c_node.next
+            _removeText(c_node.next)
+            tree.xmlReplaceNode(c_node, element._c_node)
+            _moveTail(c_next, element._c_node)
+            moveNodeToDocument(self._doc, c_source_doc, element._c_node)
+            if not attemptDeallocation(c_node):
+                moveNodeToDocument(self._doc, c_node.doc, c_node)
+
+    def __delitem__(self, x):
+        u"""__delitem__(self, x)
+
+        Deletes the given subelement or a slice.
+        """
+        c_node = tree.ffi.NULL
+        step = 0
+        slicelength = 0
+        _assertValidNode(self)
+        if python.PySlice_Check(x):
+            # slice deletion
+            if _isFullSlice(x):
+                c_node = self._c_node.children
+                if c_node:
+                    if not _isElement(c_node):
+                        c_node = _nextElement(c_node)
+                    while c_node:
+                        c_next = _nextElement(c_node)
+                        _removeNode(self._doc, c_node)
+                        c_node = c_next
+            else:
+                c_node, step, slicelength = _findChildSlice(x, self._c_node)
+                _deleteSlice(self._doc, c_node, slicelength, step)
+        else:
+            # item deletion
+            c_node = _findChild(self._c_node, x)
+            if not c_node:
+                raise IndexError, u"index out of range: %d" % x
+            _removeText(c_node.next)
+            _removeNode(self._doc, c_node)
+
+    def __deepcopy__(self, memo):
+        u"__deepcopy__(self, memo)"
+        return self.__copy__()
+
+    def __copy__(self):
+        u"__copy__(self)"
+        _assertValidNode(self)
+        c_doc = _copyDocRoot(self._doc._c_doc, self._c_node) # recursive
+        new_doc = _documentFactory(c_doc, self._doc._parser)
+        root = new_doc.getroot()
+        if root is not None:
+            return root
+        # Comment/PI
+        c_node = c_doc.children
+        while c_node and c_node.type != self._c_node.type:
+            c_node = c_node.next
+        if not c_node:
+            return None
+        return _elementFactory(new_doc, c_node)
+
+    def set(self, key, value):
+        u"""set(self, key, value)
+
+        Sets an element attribute.
+        """
+        _assertValidNode(self)
+        _setAttributeValue(self, key, value)
+
+    def append(self, element):
+        u"""append(self, element)
+
+        Adds a subelement to the end of this element.
+        """
+        _assertValidNode(self)
+        _assertValidNode(element)
+        _appendChild(self, element)
+
+    def addnext(self, element):
+        u"""addnext(self, element)
+
+        Adds the element as a following sibling directly after this
+        element.
+
+        This is normally used to set a processing instruction or comment after
+        the root node of a document.  Note that tail text is automatically
+        discarded when adding at the root level.
+        """
+        _assertValidNode(self)
+        _assertValidNode(element)
+        if self._c_node.parent and not _isElement(self._c_node.parent):
+            if element._c_node.type != tree.XML_PI_NODE:
+                if element._c_node.type != tree.XML_COMMENT_NODE:
+                    raise TypeError, u"Only processing instructions and comments can be siblings of the root element"
+            element.tail = None
+        _appendSibling(self, element)
+
+    def addprevious(self, element):
+        u"""addprevious(self, element)
+
+        Adds the element as a preceding sibling directly before this
+        element.
+
+        This is normally used to set a processing instruction or comment
+        before the root node of a document.  Note that tail text is
+        automatically discarded when adding at the root level.
+        """
+        _assertValidNode(self)
+        _assertValidNode(element)
+        if self._c_node.parent and not _isElement(self._c_node.parent):
+            if element._c_node.type != tree.XML_PI_NODE:
+                if element._c_node.type != tree.XML_COMMENT_NODE:
+                    raise TypeError, u"Only processing instructions and comments can be siblings of the root element"
+            element.tail = None
+        _prependSibling(self, element)
+
+    def extend(self, elements):
+        u"""extend(self, elements)
+
+        Extends the current children by the elements in the iterable.
+        """
+        _assertValidNode(self)
+        for element in elements:
+            if element is None:
+                raise TypeError, u"Node must not be None"
+            _assertValidNode(element)
+            _appendChild(self, element)
+
+    def clear(self):
+        u"""clear(self)
+
+        Resets an element.  This function removes all subelements, clears
+        all attributes and sets the text and tail properties to None.
+        """
+        _assertValidNode(self)
+        c_node = self._c_node
+        # remove self.text and self.tail
+        _removeText(c_node.children)
+        _removeText(c_node.next)
+        # remove all attributes
+        c_attr = c_node.properties
+        while c_attr:
+            c_attr_next = c_attr.next
+            tree.xmlRemoveProp(c_attr)
+            c_attr = c_attr_next
+        # remove all subelements
+        c_node = c_node.children
+        if c_node:
+            if not _isElement(c_node):
+                c_node = _nextElement(c_node)
+            while c_node:
+                c_node_next = _nextElement(c_node)
+                _removeNode(self._doc, c_node)
+                c_node = c_node_next
+
+    def insert(self, index, element):
+        u"""insert(self, index, element)
+
+        Inserts a subelement at the given position in this element
+        """
+        _assertValidNode(self)
+        _assertValidNode(element)
+        c_node = _findChild(self._c_node, index)
+        if not c_node:
+            _appendChild(self, element)
+            return
+        c_source_doc = c_node.doc
+        c_next = element._c_node.next
+        tree.xmlAddPrevSibling(c_node, element._c_node)
+        _moveTail(c_next, element._c_node)
+        moveNodeToDocument(self._doc, c_source_doc, element._c_node)
+
+    def remove(self, element):
+        u"""remove(self, element)
+
+        Removes a matching subelement. Unlike the find methods, this
+        method compares elements based on identity, not on tag value
+        or contents.
+        """
+        _assertValidNode(self)
+        _assertValidNode(element)
+        c_node = element._c_node
+        if c_node.parent != self._c_node:
+            raise ValueError, u"Element is not a child of this node."
+        c_next = element._c_node.next
+        tree.xmlUnlinkNode(c_node)
+        _moveTail(c_next, c_node)
+        # fix namespace declarations
+        moveNodeToDocument(self._doc, c_node.doc, c_node)
+
+    def replace(self, old_element, new_element):
+        u"""replace(self, old_element, new_element)
+
+        Replaces a subelement with the element passed as second argument.
+        """
+        _assertValidNode(self)
+        _assertValidNode(old_element)
+        _assertValidNode(new_element)
+        c_old_node = old_element._c_node
+        if c_old_node.parent != self._c_node:
+            raise ValueError, u"Element is not a child of this node."
+        c_old_next = c_old_node.next
+        c_new_node = new_element._c_node
+        c_new_next = c_new_node.next
+        c_source_doc = c_new_node.doc
+        tree.xmlReplaceNode(c_old_node, c_new_node)
+        _moveTail(c_new_next, c_new_node)
+        _moveTail(c_old_next, c_old_node)
+        moveNodeToDocument(self._doc, c_source_doc, c_new_node)
+        # fix namespace declarations
+        moveNodeToDocument(self._doc, c_old_node.doc, c_old_node)
+
+     # PROPERTIES
+
+    @property
+    def tag(self):
+        u"""Element tag
+        """
+        if self._tag is not None:
+            return self._tag
+        _assertValidNode(self)
+        self._tag = _namespacedName(self._c_node)
+        return self._tag
+    @tag.setter
+    def tag(self, value):
+        _assertValidNode(self)
+        ns, name = _getNsTag(value)
+        parser = self._doc._parser
+        if parser is not None and parser._for_html:
+            _htmlTagValidOrRaise(name)
+        else:
+            _tagValidOrRaise(name)
+        self._tag = value
+        tree.xmlNodeSetName(self._c_node, name)
+        if ns is None:
+            self._c_node.ns = tree.ffi.NULL
+        else:
+            self._doc._setNodeNs(self._c_node, ns)
+
+    @property
+    def attrib(self):
+        u"""Element attribute dictionary. Where possible, use get(), set(),
+        keys(), values() and items() to access element attributes.
+        """
+        _assertValidNode(self)
+        return _Attrib(self)
+
+    @property
+    def text(self):
+        u"""Text before the first subelement. This is either a string or
+        the value None, if there was no text.
+        """
+        _assertValidNode(self)
+        return _collectText(self._c_node.children)
+    @text.setter
+    def text(self, value):
+        _assertValidNode(self)
+        if isinstance(value, QName):
+            value = _resolveQNameText(self, value).decode('utf8')
+        _setNodeText(self._c_node, value)
+    # using 'del el.text' is the wrong thing to do
+    #def __del__(self):
+    #    _setNodeText(self._c_node, None)
+
+    @property
+    def tail(self):
+        u"""Text after this element's end tag, but before the next sibling
+        element's start tag. This is either a string or the value None, if
+        there was no text.
+        """
+        _assertValidNode(self)
+        return _collectText(self._c_node.next)
+    @tail.setter
+    def tail(self, value):
+        _assertValidNode(self)
+        _setTailText(self._c_node, value)
+    # using 'del el.tail' is the wrong thing to do
+    #def __del__(self):
+    #    _setTailText(self._c_node, None)
+
+    # not in ElementTree, read-only
+    @property
+    def prefix(self):
+        u"""Namespace prefix or None.
+        """
+        if self._c_node.ns:
+            if self._c_node.ns.prefix:
+                return funicode(self._c_node.ns.prefix)
+        return None
+
+    # not in ElementTree, read-only
+    @property
+    def sourceline(self):
+        u"""Original line number as found by the parser or None if unknown.
+        """
+        _assertValidNode(self)
+        line = tree.xmlGetLineNo(self._c_node)
+        if line > 0:
+            return line
+        else:
+            return None
+    @sourceline.setter
+    def sourceline(self, line):
+        _assertValidNode(self)
+        if line < 0:
+            self._c_node.line = 0
+        else:
+            self._c_node.line = line
+
+    # not in ElementTree, read-only
+    @property
+    def nsmap(self):
+        u"""Namespace prefix->URI mapping known in the context of this
+        Element.  This includes all namespace declarations of the
+        parents.
+
+        Note that changing the returned dict has no effect on the Element.
+        """
+        nsmap = {}
+        _assertValidNode(self)
+        c_node = self._c_node
+        while c_node and c_node.type == tree.XML_ELEMENT_NODE:
+            c_ns = c_node.nsDef
+            while c_ns:
+                prefix = None if not c_ns.prefix else funicode(c_ns.prefix)
+                if prefix not in nsmap:
+                    nsmap[prefix] = None if not c_ns.href else funicode(c_ns.href)
+                c_ns = c_ns.next
+            c_node = c_node.parent
+        return nsmap
+
+    # not in ElementTree, read-only
+    @property
+    def base(self):
+        u"""The base URI of the Element (xml:base or HTML base URL).
+        None if the base URI is unknown.
+
+        Note that the value depends on the URL of the document that
+        holds the Element if there is no xml:base attribute on the
+        Element or its ancestors.
+
+        Setting this property will set an xml:base attribute on the
+        Element, regardless of the document type (XML or HTML).
+        """
+        _assertValidNode(self)
+        c_base = tree.xmlNodeGetBase(self._doc._c_doc, self._c_node)
+        if not c_base:
+            if not self._doc._c_doc.URL:
+                return None
+            return _decodeFilename(tree.ffi.string(self._doc._c_doc.URL))
+        base = _decodeFilename(tree.ffi.string(c_base))
+        tree.xmlFree(c_base)
+        return base
+    @base.setter
+    def base(self, url):
+        _assertValidNode(self)
+        if url is None:
+            c_base = tree.ffi.NULL
+        else:
+            url = _encodeFilename(url)
+            c_base = url
+        tree.xmlNodeSetBase(self._c_node, c_base)
+
+    # ACCESSORS
+    def __repr__(self):
+        u"__repr__(self)"
+        return u"<Element %s at 0x%x>" % (self.tag, id(self))
+
+    def __getitem__(self, x):
+        u"""Returns the subelement at the given position or the requested
+        slice.
+        """
+        c_node = tree.ffi.NULL
+        step = 0
+        slicelength = 0
+        _assertValidNode(self)
+        if python.PySlice_Check(x):
+            # slicing
+            if _isFullSlice(x):
+                return _collectChildren(self)
+            c_node, step, slicelength = _findChildSlice(
+                x, self._c_node)
+            if not c_node:
+                return []
+            if step > 0:
+                next_element = _nextElement
+            else:
+                step = -step
+                next_element = _previousElement
+            result = []
+            c = 0
+            while c_node and c < slicelength:
+                result.append(_elementFactory(self._doc, c_node))
+                c = c + 1
+                for i in xrange(step):
+                    c_node = next_element(c_node)
+            return result
+        else:
+            # indexing
+            c_node = _findChild(self._c_node, x)
+            if not c_node:
+                raise IndexError, u"list index out of range"
+            return _elementFactory(self._doc, c_node)
+
+    def __len__(self):
+        u"""__len__(self)
+
+        Returns the number of subelements.
+        """
+        _assertValidNode(self)
+        return _countElements(self._c_node.children)
+
+    def index(self, child, start=None, stop=None):
+        u"""index(self, child, start=None, stop=None)
+
+        Find the position of the child within the parent.
+
+        This method is not part of the original ElementTree API.
+        """
+        _assertValidNode(self)
+        _assertValidNode(child)
+        c_child = child._c_node
+        if c_child.parent != self._c_node:
+            raise ValueError, u"Element is not a child of this node."
+
+        # handle the unbounded search straight away (normal case)
+        if stop is None and (start is None or start == 0):
+            k = 0
+            c_child = c_child.prev
+            while c_child:
+                if _isElement(c_child):
+                    k += 1
+                c_child = c_child.prev
+            return k
+
+        # check indices
+        if start is None:
+            c_start = 0
+        else:
+            c_start = start
+        if stop is None:
+            c_stop = 0
+        else:
+            c_stop = stop
+            if c_stop == 0 or \
+                   c_start >= c_stop and (c_stop > 0 or c_start < 0):
+                raise ValueError, u"list.index(x): x not in slice"
+
+        # for negative slice indices, check slice before searching index
+        if c_start < 0 or c_stop < 0:
+            # start from right, at most up to leftmost(c_start, c_stop)
+            if c_start < c_stop:
+                k = -c_start
+            else:
+                k = -c_stop
+            c_start_node = self._c_node.last
+            l = 1
+            while c_start_node != c_child and l < k:
+                if _isElement(c_start_node):
+                    l += 1
+                c_start_node = c_start_node.prev
+            if c_start_node == c_child:
+                # found! before slice end?
+                if c_stop < 0 and l <= -c_stop:
+                    raise ValueError, u"list.index(x): x not in slice"
+            elif c_start < 0:
+                raise ValueError, u"list.index(x): x not in slice"
+
+        # now determine the index backwards from child
+        c_child = c_child.prev
+        k = 0
+        if c_stop > 0:
+            # we can optimize: stop after c_stop elements if not found
+            while c_child and k < c_stop:
+                if _isElement(c_child):
+                    k += 1
+                c_child = c_child.prev
+            if k < c_stop:
+                return k
+        else:
+            # traverse all
+            while c_child:
+                if _isElement(c_child):
+                    k = k + 1
+                c_child = c_child.prev
+            if c_start > 0:
+                if k >= c_start:
+                    return k
+            else:
+                return k
+        if c_start != 0 or c_stop != 0:
+            raise ValueError, u"list.index(x): x not in slice"
+        else:
+            raise ValueError, u"list.index(x): x not in list"
+
+    def get(self, key, default=None):
+        u"""get(self, key, default=None)
+
+        Gets an element attribute.
+        """
+        _assertValidNode(self)
+        return _getAttributeValue(self, key, default)
+
+    def keys(self):
+        u"""keys(self)
+
+        Gets a list of attribute names.  The names are returned in an
+        arbitrary order (just like for an ordinary Python dictionary).
+        """
+        _assertValidNode(self)
+        return _collectAttributes(self._c_node, 1)
+
+    def values(self):
+        u"""values(self)
+
+        Gets element attribute values as a sequence of strings.  The
+        attributes are returned in an arbitrary order.
+        """
+        _assertValidNode(self)
+        return _collectAttributes(self._c_node, 2)
+
+    def items(self):
+        u"""items(self)
+
+        Gets element attributes, as a sequence. The attributes are returned in
+        an arbitrary order.
+        """
+        _assertValidNode(self)
+        return _collectAttributes(self._c_node, 3)
+
+    def getchildren(self):
+        u"""getchildren(self)
+
+        Returns all direct children.  The elements are returned in document
+        order.
+
+        :deprecated: Note that this method has been deprecated as of
+          ElementTree 1.3 and lxml 2.0.  New code should use
+          ``list(element)`` or simply iterate over elements.
+        """
+        _assertValidNode(self)
+        return _collectChildren(self)
+
+    def getparent(self):
+        u"""getparent(self)
+
+        Returns the parent of this element or None for the root element.
+        """
+        #_assertValidNode(self) # not needed
+        c_node = _parentElement(self._c_node)
+        if not c_node:
+            return None
+        return _elementFactory(self._doc, c_node)
+
+    def getnext(self):
+        u"""getnext(self)
+
+        Returns the following sibling of this element or None.
+        """
+        #_assertValidNode(self) # not needed
+        c_node = _nextElement(self._c_node)
+        if not c_node:
+            return None
+        return _elementFactory(self._doc, c_node)
+
+    def getprevious(self):
+        u"""getprevious(self)
+
+        Returns the preceding sibling of this element or None.
+        """
+        #_assertValidNode(self) # not needed
+        c_node = _previousElement(self._c_node)
+        if not c_node:
+            return None
+        return _elementFactory(self._doc, c_node)
+
+    def itersiblings(self, tag=None, preceding=False, *tags):
+        u"""itersiblings(self, tag=None, *tags, preceding=False)
+
+        Iterate over the following or preceding siblings of this element.
+
+        The direction is determined by the 'preceding' keyword which
+        defaults to False, i.e. forward iteration over the following
+        siblings.  When True, the iterator yields the preceding
+        siblings in reverse document order, i.e. starting right before
+        the current element and going backwards.
+
+        Can be restricted to find only elements with a specific tag,
+        see `iter`.
+        """
+        if tag is not None:
+            tags += (tag,)
+        return SiblingsIterator(self, tags, preceding=preceding)
+
+    def iterancestors(self, tag=None, *tags):
+        u"""iterancestors(self, tag=None, *tags)
+
+        Iterate over the ancestors of this element (from parent to parent).
+
+        Can be restricted to find only elements with a specific tag,
+        see `iter`.
+        """
+        if tag is not None:
+            tags += (tag,)
+        return AncestorsIterator(self, tags)
+
+    def iterdescendants(self, tag=None, *tags):
+        u"""iterdescendants(self, tag=None, *tags)
+
+        Iterate over the descendants of this element in document order.
+
+        As opposed to ``el.iter()``, this iterator does not yield the element
+        itself.  The returned elements can be restricted to find only elements
+        with a specific tag, see `iter`.
+        """
+        if tag is not None:
+            tags += (tag,)
+        return ElementDepthFirstIterator(self, tags, inclusive=False)
+
+    def iterchildren(self, tag=None, reversed=False, *tags):
+        u"""iterchildren(self, tag=None, *tags, reversed=False)
+
+        Iterate over the children of this element.
+
+        As opposed to using normal iteration on this element, the returned
+        elements can be reversed with the 'reversed' keyword and restricted
+        to find only elements with a specific tag, see `iter`.
+        """
+        if tag is not None:
+            tags += (tag,)
+        return ElementChildIterator(self, tags, reversed=reversed)
+
+    def getroottree(self):
+        u"""getroottree(self)
+
+        Return an ElementTree for the root node of the document that
+        contains this element.
+
+        This is the same as following element.getparent() up the tree until it
+        returns None (for the root element) and then build an ElementTree for
+        the last parent that was returned."""
+        _assertValidDoc(self._doc)
+        return _elementTreeFactory(self._doc, None)
+
+    def getiterator(self, tag=None, *tags):
+        u"""getiterator(self, tag=None, *tags)
+
+        Returns a sequence or iterator of all elements in the subtree in
+        document order (depth first pre-order), starting with this
+        element.
+
+        Can be restricted to find only elements with a specific tag,
+        see `iter`.
+
+        :deprecated: Note that this method is deprecated as of
+          ElementTree 1.3 and lxml 2.0.  It returns an iterator in
+          lxml, which diverges from the original ElementTree
+          behaviour.  If you want an efficient iterator, use the
+          ``element.iter()`` method instead.  You should only use this
+          method in new code if you require backwards compatibility
+          with older versions of lxml or ElementTree.
+        """
+        if tag is not None:
+            tags += (tag,)
+        return ElementDepthFirstIterator(self, tags)
+
+    def iter(self, tag=None, *tags):
+        u"""iter(self, tag=None, *tags)
+
+        Iterate over all elements in the subtree in document order (depth
+        first pre-order), starting with this element.
+
+        Can be restricted to find only elements with a specific tag:
+        pass ``"{ns}localname"`` as tag. Either or both of ``ns`` and
+        ``localname`` can be ``*`` for a wildcard; ``ns`` can be empty
+        for no namespace. ``"localname"`` is equivalent to ``"{}localname"``
+        but ``"*"`` is ``"{*}*"``, not ``"{}*"``.
+
+        You can also pass the Element, Comment, ProcessingInstruction and
+        Entity factory functions to look only for the specific element type.
+
+        Passing a sequence of tags will let the iterator return all
+        elements matching any of these tags, in document order.
+        """
+        if tag is not None:
+            tags += (tag,)
+        return ElementDepthFirstIterator(self, tags)
+
+    def itertext(self, tag=None, with_tail=True, *tags):
+        u"""itertext(self, tag=None, *tags, with_tail=True)
+
+        Iterates over the text content of a subtree.
+
+        You can pass a tag name to restrict text content to specific elements,
+        see `iter`.
+
+        You can set the ``with_tail`` keyword argument to ``False`` to skip
+        over tail text.
+        """
+        if tag is not None:
+            tags += (tag,)
+        return ElementTextIterator(self, tags, with_tail=with_tail)
+
+    def makeelement(self, _tag, attrib=None, nsmap=None, **_extra):
+        u"""makeelement(self, _tag, attrib=None, nsmap=None, **_extra)
+
+        Creates a new element associated with the same document.
+        """
+        _assertValidDoc(self._doc)
+        return _makeElement(_tag, tree.ffi.NULL, self._doc, None, None, None,
+                            attrib, nsmap, _extra)
+
+    def find(self, path, namespaces=None):
+        u"""find(self, path, namespaces=None)
+
+        Finds the first matching subelement, by tag name or path.
+
+        The optional ``namespaces`` argument accepts a
+        prefix-to-namespace mapping that allows the usage of XPath
+        prefixes in the path expression.
+        """
+        if isinstance(path, QName):
+            path = path.text
+        return _elementpath.find(self, path, namespaces)
+
+    def findtext(self, path, default=None, namespaces=None):
+        u"""findtext(self, path, default=None, namespaces=None)
+
+        Finds text for the first matching subelement, by tag name or path.
+
+        The optional ``namespaces`` argument accepts a
+        prefix-to-namespace mapping that allows the usage of XPath
+        prefixes in the path expression.
+        """
+        if isinstance(path, QName):
+            path = path.text
+        return _elementpath.findtext(self, path, default, namespaces)
+
+    def findall(self, path, namespaces=None):
+        u"""findall(self, path, namespaces=None)
+
+        Finds all matching subelements, by tag name or path.
+
+        The optional ``namespaces`` argument accepts a
+        prefix-to-namespace mapping that allows the usage of XPath
+        prefixes in the path expression.
+        """
+        if isinstance(path, QName):
+            path = path.text
+        return _elementpath.findall(self, path, namespaces)
+
+    def iterfind(self, path, namespaces=None):
+        u"""iterfind(self, path, namespaces=None)
+
+        Iterates over all matching subelements, by tag name or path.
+
+        The optional ``namespaces`` argument accepts a
+        prefix-to-namespace mapping that allows the usage of XPath
+        prefixes in the path expression.
+        """
+        if isinstance(path, QName):
+            path = path.text
+        return _elementpath.iterfind(self, path, namespaces)
+
+    def xpath(self, _path, namespaces=None, extensions=None,
+              smart_strings=True, **_variables):
+        u"""xpath(self, _path, namespaces=None, extensions=None, smart_strings=True, **_variables)
+
+        Evaluate an xpath expression using the element as context node.
+        """
+        evaluator = XPathElementEvaluator(self, namespaces=namespaces,
+                                          extensions=extensions,
+                                          smart_strings=smart_strings)
+        return evaluator(_path, **_variables)
+
+
+from .parsertarget import _TargetParserResult
+from .parser import _parseDocument, _newXMLDoc, _copyDocRoot, HTMLParser
+from .proxy import getProxy, hasProxy
+from .proxy import _registerProxy, _unregisterProxy, _releaseProxy
+from .proxy import attemptDeallocation, moveNodeToDocument
+from .proxy import _fakeRootDoc, _destroyFakeDoc
+from .serializer import _tostring, _tofilelike, _tofilelikeC14N, _tostringC14N
+from .serializer import xmlfile
+from .iterparse import iterparse, iterwalk
+from .saxparser import TreeBuilder
+from .extensions import XPathEvalError, XPathResultError, Extension
+
+def _elementFactory(doc, c_node):
+    if not c_node:
+        return None
+    result = getProxy(c_node)
+    if result is not None:
+        return result
+
+    # Not a module-level import: these globals change!
+    from .classlookup import LOOKUP_ELEMENT_CLASS, ELEMENT_CLASS_LOOKUP_STATE
+
+    element_class = LOOKUP_ELEMENT_CLASS(
+        ELEMENT_CLASS_LOOKUP_STATE, doc, c_node)
+    # prevent re-entry race condition - we just called into Python
+    result = getProxy(c_node)
+    if result is not None:
+        return result
+    result = NEW_ELEMENT(element_class)
+    # prevent re-entry race condition - we just called into Python
+    if hasProxy(c_node):
+        result._c_node = tree.ffi.NULL
+        return getProxy(c_node)
+
+    _registerProxy(result, doc, c_node)
+    if element_class is not _Element:
+        result._init()
+    return result
+
+
+class __ContentOnlyElement(_Element):
+    def _raiseImmutable(self):
+        raise TypeError, u"this element does not have children or attributes"
+
+    def set(self, key, value):
+        u"set(self, key, value)"
+        self._raiseImmutable()
+
+    def append(self, value):
+        u"append(self, value)"
+        self._raiseImmutable()
+
+    def insert(self, index, value):
+        u"insert(self, index, value)"
+        self._raiseImmutable()
+
+    def __setitem__(self, index, value):
+        u"__setitem__(self, index, value)"
+        self._raiseImmutable()
+
+    @property
+    def attrib(self):
+        return {}
+
+    @property
+    def text(self):
+        _assertValidNode(self)
+        if not self._c_node.content:
+            return ''
+        else:
+            return funicode(self._c_node.content)
+    @text.setter
+    def text(self, value):
+        _assertValidNode(self)
+        if value is None:
+            c_text = NULL
+        else:
+            value = _utf8(value)
+            c_text = value
+        tree.xmlNodeSetContent(self._c_node, c_text)
+
+
+class _Comment(__ContentOnlyElement):
+    @property
+    def tag(self):
+        return Comment
+
+    def __repr__(self):
+        return u"<!--%s-->" % self.text
+
+class _ProcessingInstruction(__ContentOnlyElement):
+    @property
+    def tag(self):
+        return ProcessingInstruction
+
+    @property
+    def target(self):
+        # not in ElementTree
+        _assertValidNode(self)
+        return funicode(self._c_node.name)
+    @target.setter
+    def target(self, value):
+        _assertValidNode(self)
+        value = _utf8(value)
+        c_text = value
+        tree.xmlNodeSetName(self._c_node, c_text)
+
+    def __repr__(self):
+        text = self.text
+        if text:
+            return u"<?%s %s?>" % (self.target, text)
+        else:
+            return u"<?%s?>" % self.target
+
+    def get(self, key, default=None):
+        u"""get(self, key, default=None)
+
+        Try to parse pseudo-attributes from the text content of the
+        processing instruction, search for one with the given key as
+        name and return its associated value.
+
+        Note that this is only a convenience method for the most
+        common case that all text content is structured in
+        attribute-like name-value pairs with properly quoted values.
+        It is not guaranteed to work for all possible text content.
+        """
+        return self.attrib.get(key, default)
+
+    @property
+    def attrib(self):
+        u"""Returns a dict containing all pseudo-attributes that can be
+        parsed from the text content of this processing instruction.
+        Note that modifying the dict currently has no effect on the
+        XML node, although this is not guaranteed to stay this way.
+        """
+        return { attr : (value1 or value2)
+                 for attr, value1, value2 in _FIND_PI_ATTRIBUTES(u' ' + self.text) }
+
+_FIND_PI_ATTRIBUTES = re.compile(ur'\s+(\w+)\s*=\s*(?:\'([^\']*)\'|"([^"]*)")', re.U).findall
+
+class _Entity(__ContentOnlyElement):
+    @property
+    def tag(self):
+        return Entity
+
+    # not in ElementTree
+    @property
+    def name(self):
+        _assertValidNode(self)
+        return funicode(self._c_node.name)
+    @name.setter
+    def name(self, value):
+        _assertValidNode(self)
+        value_utf = _utf8(value)
+        assert u'&' not in value and u';' not in value, \
+            u"Invalid entity name '%s'" % value
+        tree.xmlNodeSetName(self._c_node, _xcstr(value_utf))
+
+    @property
+    def text(self):
+        # FIXME: should this be None or '&[VALUE];' or the resolved
+        # entity value ?
+        _assertValidNode(self)
+        return u'&%s;' % funicode(self._c_node.name)
+
+    def __repr__(self):
+        return u"&%s;" % self.name
+
+from .classlookup import CommentBase, ElementBase, PIBase, EntityBase
+from .classlookup import ElementClassLookup
+from .classlookup import CustomElementClassLookup, PythonElementClassLookup
+from .classlookup import ElementDefaultClassLookup
+from .classlookup import ParserBasedElementClassLookup
+from .classlookup import AttributeBasedElementClassLookup
+from .classlookup import set_element_class_lookup
+from .nsclasses import ElementNamespaceClassLookup, FunctionNamespace
+
+class QName:
+    u"""QName(text_or_uri, tag=None)
+
+    QName wrapper for qualified XML names.
+
+    Pass a tag name by itself or a namespace URI and a tag name to
+    create a qualified name.  Alternatively, pass an Element to
+    extract its tag name.
+
+    The ``text`` property holds the qualified name in
+    ``{namespace}tagname`` notation.  The ``namespace`` and
+    ``localname`` properties hold the respective parts of the tag
+    name.
+
+    You can pass QName objects wherever a tag name is expected.  Also,
+    setting Element text from a QName will resolve the namespace
+    prefix and set a qualified text value.  This is helpful in XML
+    languages like SOAP or XML-Schema that use prefixed tag names in
+    their text content.
+    """
+    def __init__(self, text_or_uri_or_element, tag=None):
+        if not _isString(text_or_uri_or_element):
+            if isinstance(text_or_uri_or_element, _Element):
+                text_or_uri_or_element = text_or_uri_or_element.tag
+                if not _isString(text_or_uri_or_element):
+                    raise ValueError, (u"Invalid input tag of type %r" %
+                                       type(text_or_uri_or_element))
+            elif isinstance(text_or_uri_or_element, QName):
+                text_or_uri_or_element = text_or_uri_or_element.text
+            else:
+                text_or_uri_or_element = unicode(text_or_uri_or_element)
+
+        ns_utf, tag_utf = _getNsTag(text_or_uri_or_element)
+        if tag is not None:
+            # either ('ns', 'tag') or ('{ns}oldtag', 'newtag')
+            if ns_utf is None:
+                ns_utf = tag_utf # case 1: namespace ended up as tag name
+            tag_utf = _utf8(tag)
+        _tagValidOrRaise(tag_utf)
+        self.localname = tag_utf.decode('utf8')
+        if ns_utf is None:
+            self.namespace = None
+            self.text = self.localname
+        else:
+            self.namespace = ns_utf.decode('utf8')
+            self.text = u"{%s}%s" % (self.namespace, self.localname)
+    def __str__(self):
+        return self.text
+    def __hash__(self):
+        return self.text.__hash__()
+    def __cmp__(self, other):
+        return cmp(unicode(self), unicode(other))
+
+
+class _ElementTree(object):
+    _doc = None
+    # Note that _doc is only used to store the original document if we do not
+    # have a _context_node.  All methods should prefer self._context_node._doc
+    # to honour tree restructuring.  _doc can happily be None!
+
+    def _assertHasRoot(self):
+        u"""We have to take care here: the document may not have a root node!
+        This can happen if ElementTree() is called without any argument and
+        the caller 'forgets' to call parse() afterwards, so this is a bug in
+        the caller program.
+        """
+        assert self._context_node is not None, \
+               u"ElementTree not initialized, missing root"
+
+    def parse(self, source, parser=None, base_url=None):
+        u"""parse(self, source, parser=None, base_url=None)
+
+        Updates self with the content of source and returns its root
+        """
+        doc = None
+        try:
+            doc = _parseDocument(source, parser, base_url)
+            self._context_node = doc.getroot()
+            if self._context_node is None:
+                self._doc = doc
+        except _TargetParserResult, result_container:
+            # raises a TypeError if we don't get an _Element
+            if not isinstance(result_container.result, _Element):
+                raise TypeError("Expected Element object, got %s" %
+                                result_container.result.__class__.__name__)
+            self._context_node = result_container.result
+        return self._context_node
+
+    def getroot(self):
+        u"""getroot(self)
+
+        Gets the root element for this tree.
+        """
+        return self._context_node
+
+    def __copy__(self):
+        return _elementTreeFactory(self._doc, self._context_node)
+
+    def __deepcopy__(self, memo):
+        if self._context_node is not None:
+            root = self._context_node.__copy__()
+            _copyNonElementSiblings(self._context_node._c_node, root._c_node)
+            doc = root._doc
+            c_doc = self._context_node._doc._c_doc
+            if c_doc.intSubset and not doc._c_doc.intSubset:
+                doc._c_doc.intSubset = tree.xmlCopyDtd(c_doc.intSubset)
+                if not doc._c_doc.intSubset:
+                    raise MemoryError()
+            if c_doc.extSubset and not doc._c_doc.extSubset:
+                doc._c_doc.extSubset = tree.xmlCopyDtd(c_doc.extSubset)
+                if not doc._c_doc.extSubset:
+                    raise MemoryError()
+            return _elementTreeFactory(None, root)
+        elif self._doc is not None:
+            _assertValidDoc(self._doc)
+            c_doc = tree.xmlCopyDoc(self._doc._c_doc, 1)
+            if not c_doc:
+                raise MemoryError()
+            doc = _documentFactory(c_doc, self._doc._parser)
+            return _elementTreeFactory(doc, None)
+        else:
+            # so what ...
+            return self
+
+    # not in ElementTree, read-only
+    @property
+    def docinfo(self):
+        u"""Information about the document provided by parser and DTD.  This
+        value is only defined for ElementTree objects based on the root node
+        of a parsed document (e.g.  those returned by the parse functions),
+        not for trees that were built manually.
+        """
+        self._assertHasRoot()
+        return DocInfo(self._context_node._doc)
+
+    # not in ElementTree, read-only
+    @property
+    def parser(self):
+        u"""The parser that was used to parse the document in this ElementTree.
+        """
+        if self._context_node is not None and \
+               self._context_node._doc is not None:
+            return self._context_node._doc._parser
+        if self._doc is not None:
+            return self._doc._parser
+        return None
+
+    def write(self, file, encoding=None, method=u"xml",
+              pretty_print=False, xml_declaration=None, with_tail=True,
+              standalone=None, docstring=None, compression=0,
+              exclusive=False, with_comments=True, inclusive_ns_prefixes=None):
+        u"""write(self, file, encoding=None, method="xml",
+                  pretty_print=False, xml_declaration=None, with_tail=True,
+                  standalone=None, compression=0,
+                  exclusive=False, with_comments=True, inclusive_ns_prefixes=None)
+
+        Write the tree to a filename, file or file-like object.
+
+        Defaults to ASCII encoding and writing a declaration as needed.
+
+        The keyword argument 'method' selects the output method:
+        'xml', 'html', 'text' or 'c14n'.  Default is 'xml'.
+
+        The ``exclusive`` and ``with_comments`` arguments are only
+        used with C14N output, where they request exclusive and
+        uncommented C14N serialisation respectively.
+
+        Passing a boolean value to the ``standalone`` option will
+        output an XML declaration with the corresponding
+        ``standalone`` flag.
+
+        The ``compression`` option enables GZip compression level 1-9.
+
+        The ``inclusive_ns_prefixes`` should be a list of namespace strings
+        (i.e. ['xs', 'xsi']) that will be promoted to the top-level element
+        during exclusive C14N serialisation.  This parameter is ignored if
+        exclusive mode=False.
+
+        If exclusive=True and no list is provided, a namespace will only be
+        rendered if it is used by the immediate parent or one of its attributes
+        and its prefix and values have not already been rendered by an ancestor
+        of the namespace node's parent element.
+        """
+        self._assertHasRoot()
+        _assertValidNode(self._context_node)
+        if compression is None or compression < 0:
+            compression = 0
+
+        # C14N serialisation
+        if method == 'c14n':
+            if encoding is not None:
+                raise ValueError("Cannot specify encoding with C14N")
+            if xml_declaration:
+                raise ValueError("Cannot enable XML declaration in C14N")
+
+            _tofilelikeC14N(file, self._context_node, exclusive, with_comments,
+                            compression, inclusive_ns_prefixes)
+            return
+        if not with_comments:
+            raise ValueError("Can only discard comments in C14N serialisation")
+        # suppress decl. in default case (purely for ElementTree compatibility)
+        if xml_declaration is not None:
+            write_declaration = xml_declaration
+            if encoding is None:
+                encoding = u'ASCII'
+            else:
+                encoding = encoding.upper()
+        elif encoding is None:
+            encoding = u'ASCII'
+            write_declaration = 0
+        else:
+            encoding = encoding.upper()
+            write_declaration = encoding not in \
+                                  (u'US-ASCII', u'ASCII', u'UTF8', u'UTF-8')
+        if standalone is None:
+            is_standalone = -1
+        elif standalone:
+            write_declaration = 1
+            is_standalone = 1
+        else:
+            write_declaration = 1
+            is_standalone = 0
+        _tofilelike(file, self._context_node, encoding, docstring, method,
+                    write_declaration, 1, pretty_print, with_tail,
+                    is_standalone, compression)
+
+    def getpath(self, element):
+        u"""getpath(self, element)
+
+        Returns a structural, absolute XPath expression to find that element.
+        """
+        _assertValidNode(element)
+        if self._context_node is not None:
+            root = self._context_node
+            doc = root._doc
+        elif self._doc is not None:
+            doc = self._doc
+            root = doc.getroot()
+        else:
+            raise ValueError, u"Element is not in this tree."
+        _assertValidDoc(doc)
+        _assertValidNode(root)
+        if element._doc is not doc:
+            raise ValueError, u"Element is not in this tree."
+
+        c_doc = _fakeRootDoc(doc._c_doc, root._c_node)
+        c_path = tree.xmlGetNodePath(element._c_node)
+        _destroyFakeDoc(doc._c_doc, c_doc)
+        if not c_path:
+            raise MemoryError()
+        path = funicode(c_path)
+        tree.xmlFree(c_path)
+        return path
+
+    def getiterator(self, tag=None, *tags):
+        u"""getiterator(self, *tags, tag=None)
+
+        Returns a sequence or iterator of all elements in document order
+        (depth first pre-order), starting with the root element.
+
+        Can be restricted to find only elements with a specific tag,
+        see `_Element.iter`.
+
+        :deprecated: Note that this method is deprecated as of
+          ElementTree 1.3 and lxml 2.0.  It returns an iterator in
+          lxml, which diverges from the original ElementTree
+          behaviour.  If you want an efficient iterator, use the
+          ``tree.iter()`` method instead.  You should only use this
+          method in new code if you require backwards compatibility
+          with older versions of lxml or ElementTree.
+        """
+        root = self.getroot()
+        if root is None:
+            return ()
+        if tag is not None:
+            tags += (tag,)
+        return root.getiterator(*tags)
+
+    def iter(self, tag=None, *tags):
+        u"""iter(self, tag=None, *tags)
+
+        Creates an iterator for the root element.  The iterator loops over
+        all elements in this tree, in document order.
+
+        Can be restricted to find only elements with a specific tag,
+        see `_Element.iter`.
+        """
+        root = self.getroot()
+        if root is None:
+            return ()
+        if tag is not None:
+            tags += (tag,)
+        return root.iter(*tags)
+
+    def find(self, path, namespaces=None):
+        u"""find(self, path, namespaces=None)
+
+        Finds the first toplevel element with given tag.  Same as
+        ``tree.getroot().find(path)``.
+
+        The optional ``namespaces`` argument accepts a
+        prefix-to-namespace mapping that allows the usage of XPath
+        prefixes in the path expression.
+        """
+        self._assertHasRoot()
+        root = self.getroot()
+        if _isString(path):
+            start = path[:1]
+            if start == u"/":
+                path = u"." + path
+            elif start == b"/":
+                path = b"." + path
+        return root.find(path, namespaces)
+
+    def findtext(self, path, default=None, namespaces=None):
+        u"""findtext(self, path, default=None, namespaces=None)
+
+        Finds the text for the first element matching the ElementPath
+        expression.  Same as getroot().findtext(path)
+
+        The optional ``namespaces`` argument accepts a
+        prefix-to-namespace mapping that allows the usage of XPath
+        prefixes in the path expression.
+        """
+        self._assertHasRoot()
+        root = self.getroot()
+        if _isString(path):
+            start = path[:1]
+            if start == u"/":
+                path = u"." + path
+            elif start == b"/":
+                path = b"." + path
+        return root.findtext(path, default, namespaces)
+
+    def findall(self, path, namespaces=None):
+        u"""findall(self, path, namespaces=None)
+
+        Finds all elements matching the ElementPath expression.  Same as
+        getroot().findall(path).
+
+        The optional ``namespaces`` argument accepts a
+        prefix-to-namespace mapping that allows the usage of XPath
+        prefixes in the path expression.
+        """
+        self._assertHasRoot()
+        root = self.getroot()
+        if _isString(path):
+            start = path[:1]
+            if start == u"/":
+                path = u"." + path
+            elif start == b"/":
+                path = b"." + path
+        return root.findall(path, namespaces)
+
+    def xpath(self, _path, namespaces=None, extensions=None,
+              smart_strings=True, **_variables):
+        u"""xpath(self, _path, namespaces=None, extensions=None, smart_strings=True, **_variables)
+
+        XPath evaluate in context of document.
+
+        ``namespaces`` is an optional dictionary with prefix to namespace URI
+        mappings, used by XPath.  ``extensions`` defines additional extension
+        functions.
+
+        Returns a list (nodeset), or bool, float or string.
+
+        In case of a list result, return Element for element nodes,
+        string for text and attribute values.
+
+        Note: if you are going to apply multiple XPath expressions
+        against the same document, it is more efficient to use
+        XPathEvaluator directly.
+        """
+        self._assertHasRoot()
+        evaluator = XPathDocumentEvaluator(self, namespaces=namespaces,
+                                           extensions=extensions,
+                                           smart_strings=smart_strings)
+        return evaluator(_path, **_variables)
+
+    def xslt(self, _xslt, extensions=None, access_control=None, **_kw):
+        u"""xslt(self, _xslt, extensions=None, access_control=None, **_kw)
+
+        Transform this document using other document.
+
+        xslt is a tree that should be XSLT
+        keyword parameters are XSLT transformation parameters.
+
+        Returns the transformed tree.
+
+        Note: if you are going to apply the same XSLT stylesheet against
+        multiple documents, it is more efficient to use the XSLT
+        class directly.
+        """
+        self._assertHasRoot()
+        style = XSLT(_xslt, extensions=extensions,
+                     access_control=access_control)
+        return style(self, **_kw)
+
+    def relaxng(self, relaxng):
+        u"""relaxng(self, relaxng)
+
+        Validate this document using other document.
+
+        The relaxng argument is a tree that should contain a Relax NG schema.
+
+        Returns True or False, depending on whether validation
+        succeeded.
+
+        Note: if you are going to apply the same Relax NG schema against
+        multiple documents, it is more efficient to use the RelaxNG
+        class directly.
+        """
+        self._assertHasRoot()
+        schema = RelaxNG(relaxng)
+        return schema.validate(self)
+
+    def xmlschema(self, xmlschema):
+        u"""xmlschema(self, xmlschema)
+
+        Validate this document using other document.
+
+        The xmlschema argument is a tree that should contain an XML Schema.
+
+        Returns True or False, depending on whether validation
+        succeeded.
+
+        Note: If you are going to apply the same XML Schema against
+        multiple documents, it is more efficient to use the XMLSchema
+        class directly.
+        """
+        self._assertHasRoot()
+        schema = XMLSchema(xmlschema)
+        return schema.validate(self)
+
+    def xinclude(self):
+        u"""xinclude(self)
+
+        Process the XInclude nodes in this document and include the
+        referenced XML fragments.
+
+        There is support for loading files through the file system, HTTP and
+        FTP.
+
+        Note that XInclude does not support custom resolvers in Python space
+        due to restrictions of libxml2 <= 2.6.29.
+        """
+        self._assertHasRoot()
+        XInclude()(self._context_node)
+
+    def write_c14n(self, file, exclusive=False, with_comments=True,
+                   compression=0, inclusive_ns_prefixes=None):
+        u"""write_c14n(self, file, exclusive=False, with_comments=True,
+                       compression=0, inclusive_ns_prefixes=None)
+
+        C14N write of document. Always writes UTF-8.
+
+        The ``compression`` option enables GZip compression level 1-9.
+
+        The ``inclusive_ns_prefixes`` should be a list of namespace strings
+        (i.e. ['xs', 'xsi']) that will be promoted to the top-level element
+        during exclusive C14N serialisation.  This parameter is ignored if
+        exclusive mode=False.
+
+        If exclusive=True and no list is provided, a namespace will only be
+        rendered if it is used by the immediate parent or one of its attributes
+        and its prefix and values have not already been rendered by an ancestor
+        of the namespace node's parent element.
+        """
+        self._assertHasRoot()
+        _assertValidNode(self._context_node)
+        if compression is None or compression < 0:
+            compression = 0
+        _tofilelikeC14N(file, self._context_node, exclusive, with_comments,
+                        compression, inclusive_ns_prefixes)
+
+
+def _createEntity(c_doc, name):
+    c_node = tree.xmlNewReference(c_doc, name)
+    return c_node
+
+# module-level API for ElementTree
+
+def Element(_tag, attrib=None, nsmap=None, **_extra):
+    u"""Element(_tag, attrib=None, nsmap=None, **_extra)
+
+    Element factory.  This function returns an object implementing the
+    Element interface.
+
+    Also look at the `_Element.makeelement()` and
+    `_BaseParser.makeelement()` methods, which provide a faster way to
+    create an Element within a specific document or parser context.
+    """
+    return _makeElement(_tag, tree.ffi.NULL, None, None, None, None,
+                        attrib, nsmap, _extra)
+
+def Comment(text=None):
+    u"""Comment(text=None)
+
+    Comment element factory. This factory function creates a special element that will
+    be serialized as an XML comment.
+    """
+    if text is None:
+        text = b''
+    else:
+        text = _utf8(text)
+    c_doc = _newXMLDoc()
+    doc = _documentFactory(c_doc, None)
+    c_node = _createComment(c_doc, text)
+    tree.xmlAddChild(tree.ffi.cast("xmlNodePtr", c_doc), c_node)
+    return _elementFactory(doc, c_node)
+
+def ProcessingInstruction(target, text=None):
+    u"""ProcessingInstruction(target, text=None)
+
+    ProcessingInstruction element factory. This factory function creates a
+    special element that will be serialized as an XML processing instruction.
+    """
+    target = _utf8(target)
+    if text is None:
+        text = b''
+    else:
+        text = _utf8(text)
+    c_doc = _newXMLDoc()
+    doc = _documentFactory(c_doc, None)
+    c_node = _createPI(c_doc, target, text)
+    tree.xmlAddChild(tree.ffi.cast("xmlNodePtr", c_doc), c_node)
+    return _elementFactory(doc, c_node)
+
+PI = ProcessingInstruction
+
+class CDATA(object):
+    u"""CDATA(data)
+
+    CDATA factory.  This factory creates an opaque data object that
+    can be used to set Element text.  The usual way to use it is::
+
+        >>> from lxml import etree
+        >>> el = etree.Element('content')
+        >>> el.text = etree.CDATA('a string')
+    """
+    def __init__(self, data):
+        self._utf8_data = _utf8(data)
+
+def Entity(name):
+    u"""Entity(name)
+
+    Entity factory.  This factory function creates a special element
+    that will be serialized as an XML entity reference or character
+    reference.  Note, however, that entities will not be automatically
+    declared in the document.  A document that uses entity references
+    requires a DTD to define the entities.
+    """
+    name_utf = _utf8(name)
+    c_name = name_utf
+    if c_name[0] == '#':
+        if not _characterReferenceIsValid(c_name[1:]):
+            raise ValueError, u"Invalid character reference: '%s'" % name
+    elif not _xmlNameIsValid(c_name):
+        raise ValueError, u"Invalid entity reference: '%s'" % name
+    c_doc = _newXMLDoc()
+    doc = _documentFactory(c_doc, None)
+    c_node = _createEntity(c_doc, c_name)
+    tree.xmlAddChild(tree.ffi.cast("xmlNodePtr", c_doc), c_node)
+    return _elementFactory(doc, c_node)
+
+def SubElement(_parent, _tag,
+               attrib=None, nsmap=None, **_extra):
+    u"""SubElement(_parent, _tag, attrib=None, nsmap=None, **_extra)
+
+    Subelement factory.  This function creates an element instance, and
+    appends it to an existing element.
+    """
+    return _makeSubElement(_parent, _tag, None, None, attrib, nsmap, _extra)
+
+def ElementTree(element=None, file=None, parser=None):
+    u"""ElementTree(element=None, file=None, parser=None)
+
+    ElementTree wrapper class.
+    """
+    if element is not None:
+        doc  = element._doc
+    elif file is not None:
+        try:
+            doc = _parseDocument(file, parser, None)
+        except _TargetParserResult, result_container:
+            return result_container.result
+    else:
+        c_doc = _newXMLDoc()
+        doc = _documentFactory(c_doc, parser)
+
+    return _elementTreeFactory(doc, element)
+
+def HTML(text, parser=None, base_url=None):
+    u"""HTML(text, parser=None, base_url=None)
+
+    Parses an HTML document from a string constant.  Returns the root
+    node (or the result returned by a parser target).  This function
+    can be used to embed "HTML literals" in Python code.
+
+    To override the parser with a different ``HTMLParser`` you can pass it to
+    the ``parser`` keyword argument.
+
+    The ``base_url`` keyword argument allows to set the original base URL of
+    the document to support relative Paths when looking up external entities
+    (DTD, XInclude, ...).
+    """
+    from .parser import _GLOBAL_PARSER_CONTEXT, _DEFAULT_HTML_PARSER
+    from .parser import _parseMemoryDocument
+    if parser is None:
+        parser = _GLOBAL_PARSER_CONTEXT.getDefaultParser()
+        if not isinstance(parser, HTMLParser):
+            parser = _DEFAULT_HTML_PARSER
+    try:
+        doc = _parseMemoryDocument(text, base_url, parser)
+        return doc.getroot()
+    except _TargetParserResult, result_container:
+        return result_container.result
+
+def XML(text, parser=None, base_url=None):
+    u"""XML(text, parser=None, base_url=None)
+
+    Parses an XML document or fragment from a string constant.
+    Returns the root node (or the result returned by a parser target).
+    This function can be used to embed "XML literals" in Python code,
+    like in
+
+       >>> root = etree.XML("<root><test/></root>")
+
+    To override the parser with a different ``XMLParser`` you can pass it to
+    the ``parser`` keyword argument.
+
+    The ``base_url`` keyword argument allows to set the original base URL of
+    the document to support relative Paths when looking up external entities
+    (DTD, XInclude, ...).
+    """
+    if parser is None:
+        from .parser import _GLOBAL_PARSER_CONTEXT, XMLParser
+        parser = _GLOBAL_PARSER_CONTEXT.getDefaultParser()
+        if not isinstance(parser, XMLParser):
+            parser = __DEFAULT_XML_PARSER
+    from .parser import _parseMemoryDocument
+    try:
+        doc = _parseMemoryDocument(text, base_url, parser)
+        return doc.getroot()
+    except _TargetParserResult, result_container:
+        return result_container.result
+
+def _elementTreeFactory(doc, context_node):
+    return _newElementTree(doc, context_node, _ElementTree)
+
+def _newElementTree(doc, context_node, baseclass):
+    result = baseclass()
+    if context_node is None and doc is not None:
+        context_node = doc.getroot()
+    if context_node is None:
+        _assertValidDoc(doc)
+        result._doc = doc
+    else:
+        _assertValidNode(context_node)
+    result._context_node = context_node
+    return result
+
+
+class _Attrib:
+    u"""A dict-like proxy for the ``Element.attrib`` property.
+    """
+    def __init__(self, element):
+        _assertValidNode(element)
+        self._element = element
+
+    # MANIPULATORS
+    def __setitem__(self, key, value):
+        _assertValidNode(self._element)
+        _setAttributeValue(self._element, key, value)
+
+    def __delitem__(self, key):
+        _assertValidNode(self._element)
+        _delAttribute(self._element, key)
+
+    def update(self, sequence_or_dict):
+        _assertValidNode(self._element)
+        if isinstance(sequence_or_dict, (dict, _Attrib)):
+            sequence_or_dict = sequence_or_dict.items()
+        for key, value in sequence_or_dict:
+            _setAttributeValue(self._element, key, value)
+
+    def pop(self, key, *default):
+        if len(default) > 1:
+            raise TypeError, u"pop expected at most 2 arguments, got %d" % (
+                len(default)+1)
+        _assertValidNode(self._element)
+        result = _getAttributeValue(self._element, key, None)
+        if result is None:
+            if not default:
+                raise KeyError, key
+            result = default[0]
+        else:
+            _delAttribute(self._element, key)
+        return result
+
+    def clear(self):
+        _assertValidNode(self._element)
+        c_node = self._element._c_node
+        while c_node.properties:
+            tree.xmlRemoveProp(c_node.properties)
+
+    # ACCESSORS
+    def __repr__(self):
+        _assertValidNode(self._element)
+        return repr(dict(_collectAttributes(self._element._c_node, 3) ))
+
+    def __copy__(self):
+        _assertValidNode(self._element)
+        return dict(_collectAttributes(self._element._c_node, 3))
+
+    def __deepcopy__(self, memo):
+        _assertValidNode(self._element)
+        return dict(_collectAttributes(self._element._c_node, 3))
+
+    def __getitem__(self, key):
+        _assertValidNode(self._element)
+        result = _getAttributeValue(self._element, key, None)
+        if result is None:
+            raise KeyError, key
+        return result
+
+    def __len__(self):
+        _assertValidNode(self._element)
+        c = 0
+        c_attr = self._element._c_node.properties
+        while c_attr:
+            if c_attr.type == tree.XML_ATTRIBUTE_NODE:
+                c += 1
+            c_attr = c_attr.next
+        return c
+
+    def get(self, key, default=None):
+        _assertValidNode(self._element)
+        return _getAttributeValue(self._element, key, default)
+
+    def keys(self):
+        _assertValidNode(self._element)
+        return _collectAttributes(self._element._c_node, 1)
+
+    def __iter__(self):
+        _assertValidNode(self._element)
+        return iter(_collectAttributes(self._element._c_node, 1))
+
+    def iterkeys(self):
+        _assertValidNode(self._element)
+        return iter(_collectAttributes(self._element._c_node, 1))
+
+    def values(self):
+        _assertValidNode(self._element)
+        return _collectAttributes(self._element._c_node, 2)
+
+    def itervalues(self):
+        _assertValidNode(self._element)
+        return iter(_collectAttributes(self._element._c_node, 2))
+
+    def items(self):
+        _assertValidNode(self._element)
+        return _collectAttributes(self._element._c_node, 3)
+
+    def iteritems(self):
+        _assertValidNode(self._element)
+        return iter(_collectAttributes(self._element._c_node, 3))
+
+    def has_key(self, key):
+        _assertValidNode(self._element)
+        return key in self
+
+    def __contains__(self, key):
+        _assertValidNode(self._element)
+        ns, tag = _getNsTag(key)
+        c_node = self._element._c_node
+        c_href = tree.ffi.NULL if ns is None else ns
+        return 1 if tree.xmlHasNsProp(c_node, tag, c_href) else 0
+
+    def __cmp__(self, other):
+        return cmp(dict(self), dict(other))
+
+class _AttribIterator:
+    u"""Attribute iterator - for internal use only!
+    """
+    # XML attributes must not be removed while running!
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self._node is None:
+            raise StopIteration
+        c_attr = self._c_attr
+        while c_attr and c_attr.type != tree.XML_ATTRIBUTE_NODE:
+            c_attr = c_attr.next
+        if not c_attr:
+            self._node = None
+            raise StopIteration
+
+        self._c_attr = c_attr.next
+        if self._keysvalues == 1:
+            return _namespacedName(c_attr)
+        elif self._keysvalues == 2:
+            return _attributeValue(self._node._c_node, c_attr)
+        else:
+            return (_namespacedName(c_attr),
+                    _attributeValue(self._node._c_node, c_attr))
+    next = __next__
+
+def _attributeIteratorFactory(element, keysvalues):
+    if not element._c_node.properties:
+        return ITER_EMPTY
+    attribs = _AttribIterator()
+    attribs._node = element
+    attribs._c_attr = element._c_node.properties
+    attribs._keysvalues = keysvalues
+    return attribs
+
+def ForEachIterator(object):
+    def __init__(self, top_node):
+        self._top_node = top_node
+
+    def __next__(self):
+        return next(FOR_EACH_ELEMENT_FROM(serlf._top_node._c_node, c_node, 0))
+    next = __next__
+
+class _MultiTagMatcher(object):
+    """
+    Match an xmlNode against a list of tags.
+    """
+    def __init__(self, tags):
+        self._cached_tags = []
+        self._tag_count = 0
+        self._node_types = set()
+        self._py_tags = []
+        self.initTagMatch(tags)
+
+    def __del__(self):
+        self._clear()
+
+    def rejectsAll(self):
+        return not self._tag_count and not self._node_types
+
+    def rejectsAllAttributes(self):
+        return not self._tag_count
+
+    def matchesType(self, node_type):
+        if node_type == tree.XML_ELEMENT_NODE and self._tag_count:
+            return True
+        return node_type in self._node_types
+
+    def _clear(self):
+        self._cached_tags = []
+
+    def initTagMatch(self, tags):
+        self._cached_doc = None
+        del self._py_tags[:]
+        self._clear()
+        if tags is None or tags == ():
+            # no selection in tags argument => match anything
+            self._node_types = set((
+                    tree.XML_COMMENT_NODE,
+                    tree.XML_PI_NODE,
+                    tree.XML_ENTITY_REF_NODE,
+                    tree.XML_ELEMENT_NODE))
+            return
+        else:
+            self._node_types = set()
+            self._storeTags(tags, set())
+
+    def _storeTags(self, tag, seen):
+        if tag is Comment:
+            self._node_types.add(tree.XML_COMMENT_NODE)
+        elif tag is ProcessingInstruction:
+            self._node_types.add(tree.XML_PI_NODE)
+        elif tag is Entity:
+            self._node_types.add(tree.XML_ENTITY_REF_NODE)
+        elif tag is Element:
+            self._node_types.add(tree.XML_ELEMENT_NODE)
+        elif python._isString(tag):
+            if tag in seen:
+                return
+            seen.add(tag)
+            if tag in ('*', '{*}*'):
+                self._node_types.add(tree.XML_ELEMENT_NODE)
+            else:
+                href, name = _getNsTag(tag)
+                if name == b'*':
+                    name = None
+                if href is None:
+                    href = b''  # no namespace
+                elif href == b'*':
+                    href = None  # wildcard: any namespace, including none
+                self._py_tags.append((href, name))
+        else:
+            # support a sequence of tags
+            for item in tag:
+                self._storeTags(item, seen)
+
+    def cacheTags(self, doc, force_into_dict=False):
+        """
+        Look up the tag names in the doc dict to enable string pointer comparisons.
+        """
+        if doc is self._cached_doc:
+            # doc and dict didn't change => names already cached
+            return
+        self._tag_count = 0
+        if not self._py_tags:
+            self._cached_doc = doc
+            return
+        self._tag_count = _mapTagsToQnameMatchArray(
+            doc._c_doc, self._py_tags, self._cached_tags, force_into_dict)
+        self._cached_doc = doc
+
+    def matches(self, c_node):
+        if c_node.type in self._node_types:
+            return True
+        elif c_node.type == tree.XML_ELEMENT_NODE:
+            for c_qname in self._cached_tags[:self._tag_count]:
+                if _tagMatchesExactly(c_node, c_qname):
+                    return True
+        return False
+
+    def matchesAttribute(self, c_attr):
+        """Attribute matches differ from Element matches in that they do
+        not care about node types.
+        """
+        for c_qname in self._cached_tags:
+            if _tagMatchesExactly(c_attr, c_qname):
+                return True
+        return False
+
+class _ElementMatchIterator(object):
+    def _initTagMatcher(self, tags):
+        self._matcher = _MultiTagMatcher(tags)
+
+    def __iter__(self):
+        return self
+
+    def _storeNext(self, node):
+        self._matcher.cacheTags(node._doc)
+        c_node = self._next_element(node._c_node)
+        while c_node and not self._matcher.matches(c_node):
+            c_node = self._next_element(c_node)
+        # store Python ref to next node to make sure it's kept alive
+        self._node = _elementFactory(node._doc, c_node)
+        return 0
+
+    def __next__(self):
+        current_node = self._node
+        if current_node is None:
+            raise StopIteration
+        self._storeNext(current_node)
+        return current_node
+    next = __next__
+
+
+class ElementChildIterator(_ElementMatchIterator):
+    u"""ElementChildIterator(self, node, tag=None, reversed=False)
+    Iterates over the children of an element.
+    """
+    def __init__(self, node, tag=None, reversed=False):
+        _assertValidNode(node)
+        self._initTagMatcher(tag)
+        if reversed:
+            c_node = _findChildBackwards(node._c_node, 0)
+            self._next_element = _previousElement
+        else:
+            c_node = _findChildForwards(node._c_node, 0)
+            self._next_element = _nextElement
+        self._matcher.cacheTags(node._doc)
+        while c_node and not self._matcher.matches(c_node):
+            c_node = self._next_element(c_node)
+        # store Python ref to next node to make sure it's kept alive
+        self._node = _elementFactory(node._doc, c_node)
+
+class SiblingsIterator(_ElementMatchIterator):
+    u"""SiblingsIterator(self, node, tag=None, preceding=False)
+    Iterates over the siblings of an element.
+
+    You can pass the boolean keyword ``preceding`` to specify the direction.
+    """
+    def __init__(self, node, tag=None, preceding=False):
+        _assertValidNode(node)
+        self._initTagMatcher(tag)
+        if preceding:
+            self._next_element = _previousElement
+        else:
+            self._next_element = _nextElement
+        self._storeNext(node)
+
+class AncestorsIterator(_ElementMatchIterator):
+    u"""AncestorsIterator(self, node, tag=None)
+    Iterates over the ancestors of an element (from parent to parent).
+    """
+    def __init__(self, node, tag=None):
+        _assertValidNode(node)
+        self._initTagMatcher(tag)
+        self._next_element = _parentElement
+        self._storeNext(node)
+
+class ElementDepthFirstIterator(object):
+    u"""ElementDepthFirstIterator(self, node, tag=None, inclusive=True)
+    Iterates over an element and its sub-elements in document order (depth
+    first pre-order).
+
+    Note that this also includes comments, entities and processing
+    instructions.  To filter them out, check if the ``tag`` property
+    of the returned element is a string (i.e. not None and not a
+    factory function), or pass the ``Element`` factory for the ``tag``
+    keyword.
+
+    If the optional ``tag`` argument is not None, the iterator returns only
+    the elements that match the respective name and namespace.
+
+    The optional boolean argument 'inclusive' defaults to True and can be set
+    to False to exclude the start element itself.
+
+    Note that the behaviour of this iterator is completely undefined if the
+    tree it traverses is modified during iteration.
+    """
+    # we keep Python references here to control GC
+    # keep the next Element after the one we return, and the (s)top node
+    def __init__(self, node, tag=None, inclusive=True):
+        _assertValidNode(node)
+        self._top_node  = node
+        self._next_node = node
+        self._matcher = _MultiTagMatcher(tag)
+        self._matcher.cacheTags(node._doc)
+        self.iterator = FOR_EACH_ELEMENT_FROM(self._top_node._c_node,
+                                              self._next_node._c_node, 0)
+        if not inclusive or not self._matcher.matches(node._c_node):
+            # find start node (this cannot raise StopIteration, self._next_node != None)
+            next(self)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        current_node = self._next_node
+        if current_node is None:
+            raise StopIteration
+        c_node = current_node._c_node
+        self._matcher.cacheTags(current_node._doc)
+        if not self._matcher._tag_count:
+            # no tag name was found in the dict => not in document either
+            # try to match by node type
+            c_node = self._nextNodeAnyTag(c_node)
+        else:
+            c_node = self._nextNodeMatchTag(c_node)
+        if not c_node:
+            self._next_node = None
+        else:
+            self._next_node = _elementFactory(current_node._doc, c_node)
+        return current_node
+    next = __next__
+
+    def _nextNodeAnyTag(self, c_node):
+        node_types = self._matcher._node_types
+        if not node_types:
+            return tree.ffi.NULL
+        try:
+            while True:
+                c_node = next(self.iterator)
+                if c_node.type in node_types:
+                    return c_node
+        except StopIteration:
+            return tree.ffi.NULL
+
+    def _nextNodeMatchTag(self, c_node):
+        try:
+            while True:
+                c_node = next(self.iterator)
+                if self._matcher.matches(c_node):
+                    return c_node
+        except StopIteration:
+            return tree.ffi.NULL
+
+
+class ElementTextIterator:
+    u"""ElementTextIterator(self, element, tag=None, with_tail=True)
+    Iterates over the text content of a subtree.
+
+    You can pass the ``tag`` keyword argument to restrict text content to a
+    specific tag name.
+
+    You can set the ``with_tail`` keyword argument to ``False`` to skip over
+    tail text.
+    """
+    def __init__(self, element, tag=None, with_tail=True):
+        _assertValidNode(element)
+        if with_tail:
+            events = (u"start", u"end")
+        else:
+            events = (u"start",)
+        self._start_element = element
+        self._nextEvent = iterwalk(element, events=events, tag=tag).__next__
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        result = None
+        while result is None:
+            event, element = self._nextEvent() # raises StopIteration
+            if event == u"start":
+                result = element.text
+            elif element is not self._start_element:
+                result = element.tail
+        return result
+    next = __next__
+
+def _createElement(c_doc, name_utf):
+    c_node = tree.xmlNewDocNode(c_doc, tree.ffi.NULL, name_utf, tree.ffi.NULL)
+    return c_node
+
+def _createComment(c_doc, text):
+    c_node = tree.xmlNewDocComment(c_doc, text)
+    return c_node
+
+def _createPI(c_doc, target, text):
+    c_node = tree.xmlNewDocPI(c_doc, target, text)
+    return c_node
+
+def fromstring(text, parser=None, base_url=None):
+    u"""fromstring(text, parser=None, base_url=None)
+
+    Parses an XML document or fragment from a string.  Returns the
+    root node (or the result returned by a parser target).
+
+    To override the default parser with a different parser you can pass it to
+    the ``parser`` keyword argument.
+
+    The ``base_url`` keyword argument allows to set the original base URL of
+    the document to support relative Paths when looking up external entities
+    (DTD, XInclude, ...).
+    """
+    from .parser import _parseMemoryDocument
+    try:
+        doc = _parseMemoryDocument(text, base_url, parser)
+        return doc.getroot()
+    except _TargetParserResult, result_container:
+        return result_container.result
+
+def fromstringlist(strings, parser=None):
+    u"""fromstringlist(strings, parser=None)
+
+    Parses an XML document from a sequence of strings.  Returns the
+    root node (or the result returned by a parser target).
+
+    To override the default parser with a different parser you can pass it to
+    the ``parser`` keyword argument.
+    """
+    from .parser import _GLOBAL_PARSER_CONTEXT
+    if parser is None:
+        parser = _GLOBAL_PARSER_CONTEXT.getDefaultParser()
+    feed = parser.feed
+    for data in strings:
+        feed(data)
+    return parser.close()
+
+def iselement(element):
+    u"""iselement(element)
+
+    Checks if an object appears to be a valid element object.
+    """
+    return isinstance(element, _Element) and bool(element._c_node)
+
+def dump(elem, pretty_print=True, with_tail=True):
+    u"""dump(elem, pretty_print=True, with_tail=True)
+
+    Writes an element tree or element structure to sys.stdout. This function
+    should be used for debugging only.
+    """
+    xml = tostring(elem, pretty_print=pretty_print, with_tail=with_tail,
+                   encoding=u'unicode' if python.IS_PYTHON3 else None)
+    if not pretty_print:
+        xml += '\n'
+    sys.stdout.write(xml)
+
+def tostring(element_or_tree, encoding=None, method=u"xml",
+             xml_declaration=None, pretty_print=False, with_tail=True,
+             standalone=None, doctype=None,
+             exclusive=False, with_comments=True, inclusive_ns_prefixes=None):
+    u"""tostring(element_or_tree, encoding=None, method="xml",
+                 xml_declaration=None, pretty_print=False, with_tail=True,
+                 standalone=None, doctype=None,
+                 exclusive=False, with_comments=True, inclusive_ns_prefixes=None)
+
+    Serialize an element to an encoded string representation of its XML
+    tree.
+
+    Defaults to ASCII encoding without XML declaration.  This
+    behaviour can be configured with the keyword arguments 'encoding'
+    (string) and 'xml_declaration' (bool).  Note that changing the
+    encoding to a non UTF-8 compatible encoding will enable a
+    declaration by default.
+
+    You can also serialise to a Unicode string without declaration by
+    passing the ``unicode`` function as encoding (or ``str`` in Py3),
+    or the name 'unicode'.  This changes the return value from a byte
+    string to an unencoded unicode string.
+
+    The keyword argument 'pretty_print' (bool) enables formatted XML.
+
+    The keyword argument 'method' selects the output method: 'xml',
+    'html', plain 'text' (text content without tags) or 'c14n'.
+    Default is 'xml'.
+
+    The ``exclusive`` and ``with_comments`` arguments are only used
+    with C14N output, where they request exclusive and uncommented
+    C14N serialisation respectively.
+
+    Passing a boolean value to the ``standalone`` option will output
+    an XML declaration with the corresponding ``standalone`` flag.
+
+    The ``doctype`` option allows passing in a plain string that will
+    be serialised before the XML tree.  Note that passing in non
+    well-formed content here will make the XML output non well-formed.
+    Also, an existing doctype in the document tree will not be removed
+    when serialising an ElementTree instance.
+
+    You can prevent the tail text of the element from being serialised
+    by passing the boolean ``with_tail`` option.  This has no impact
+    on the tail text of children, which will always be serialised.
+    """
+    # C14N serialisation
+    if method == 'c14n':
+        if encoding is not None:
+            raise ValueError("Cannot specify encoding with C14N")
+        if xml_declaration:
+            raise ValueError("Cannot enable XML declaration in C14N")
+        return _tostringC14N(element_or_tree, exclusive, with_comments, inclusive_ns_prefixes)
+    if not with_comments:
+        raise ValueError("Can only discard comments in C14N serialisation")
+    if encoding is unicode or (encoding is not None and encoding.upper() == 'UNICODE'):
+        if xml_declaration:
+            raise ValueError, \
+                u"Serialisation to unicode must not request an XML declaration"
+        write_declaration = 0
+        encoding = unicode
+    elif xml_declaration is None:
+        # by default, write an XML declaration only for non-standard encodings
+        write_declaration = encoding is not None and encoding.upper() not in \
+                            (u'ASCII', u'UTF-8', u'UTF8', u'US-ASCII')
+    else:
+        write_declaration = xml_declaration
+    if encoding is None:
+        encoding = u'ASCII'
+    if standalone is None:
+        is_standalone = -1
+    elif standalone:
+        write_declaration = 1
+        is_standalone = 1
+    else:
+        write_declaration = 1
+        is_standalone = 0
+
+    if isinstance(element_or_tree, _Element):
+        return _tostring(element_or_tree, encoding, doctype, method,
+                         write_declaration, 0, pretty_print, with_tail,
+                         is_standalone)
+    elif isinstance(element_or_tree, _ElementTree):
+        return _tostring(element_or_tree._context_node,
+                         encoding, doctype, method, write_declaration, 1,
+                         pretty_print, with_tail, is_standalone)
+    else:
+        raise TypeError, u"Type '%s' cannot be serialized." % \
+            python._fqtypename(element_or_tree)
+
+def tounicode(element_or_tree, method=u"xml", pretty_print=False,
+              with_tail=True, doctype=None):
+    u"""tounicode(element_or_tree, method="xml", pretty_print=False,
+                  with_tail=True, doctype=None)
+
+    Serialize an element to the Python unicode representation of its XML
+    tree.
+
+    :deprecated: use ``tostring(el, encoding=unicode)`` instead.
+
+    Note that the result does not carry an XML encoding declaration and is
+    therefore not necessarily suited for serialization to byte streams without
+    further treatment.
+
+    The boolean keyword argument 'pretty_print' enables formatted XML.
+
+    The keyword argument 'method' selects the output method: 'xml',
+    'html' or plain 'text'.
+
+    You can prevent the tail text of the element from being serialised
+    by passing the boolean ``with_tail`` option.  This has no impact
+    on the tail text of children, which will always be serialised.
+    """
+    if isinstance(element_or_tree, _Element):
+        return _tostring(element_or_tree, unicode, doctype, method,
+                          0, 0, pretty_print, with_tail, -1)
+    elif isinstance(element_or_tree, _ElementTree):
+        return _tostring(element_or_tree._context_node,
+                         unicode, doctype, method, 0, 1, pretty_print,
+                         with_tail, -1)
+    else:
+        raise TypeError, u"Type '%s' cannot be serialized." % \
+            type(element_or_tree)
+
+def parse(source, parser=None, base_url=None):
+    u"""parse(source, parser=None, base_url=None)
+
+    Return an ElementTree object loaded with source elements.  If no parser
+    is provided as second argument, the default parser is used.
+
+    The ``source`` can be any of the following:
+
+    - a file name/path
+    - a file object
+    - a file-like object
+    - a URL using the HTTP or FTP protocol
+
+    To parse from a string, use the ``fromstring()`` function instead.
+
+    Note that it is generally faster to parse from a file path or URL
+    than from an open file object or file-like object.  Transparent
+    decompression from gzip compressed sources is supported (unless
+    explicitly disabled in libxml2).
+
+    The ``base_url`` keyword allows setting a URL for the document
+    when parsing from a file-like object.  This is needed when looking
+    up external entities (DTD, XInclude, ...) with relative paths.
+    """
+    try:
+        doc = _parseDocument(source, parser, base_url)
+        return _elementTreeFactory(doc, None)
+    except _TargetParserResult, result_container:
+        return result_container.result
+
+
+################################################################################
+# Include submodules
+
+from .docloader import Resolver
+
+
+################################################################################
+# Validation
+
+from .xmlerror import _ErrorLog
+from .xmlerror import ErrorDomains, ErrorLevels, ErrorTypes
+
+class DocumentInvalid(LxmlError):
+    u"""Validation error.
+
+    Raised by all document validators when their ``assertValid(tree)``
+    method fails.
+    """
+    pass
+
+class _Validator(object):
+    u"Base class for XML validators."
+    def __init__(self):
+        self._error_log = _ErrorLog()
+
+    def validate(self, etree):
+        u"""validate(self, etree)
+
+        Validate the document using this schema.
+
+        Returns true if document is valid, false if not.
+        """
+        return self(etree)
+
+    def assertValid(self, etree):
+        u"""assertValid(self, etree)
+
+        Raises `DocumentInvalid` if the document does not comply with the schema.
+        """
+        if not self(etree):
+            raise DocumentInvalid(self._error_log._buildExceptionMessage(
+                    u"Document does not comply with schema"),
+                                  self._error_log)
+
+    def assert_(self, etree):
+        u"""assert_(self, etree)
+
+        Raises `AssertionError` if the document does not comply with the schema.
+        """
+        if not self(etree):
+            raise AssertionError, self._error_log._buildExceptionMessage(
+                u"Document does not comply with schema")
+
+    def _append_log_message(self, domain, type, level, line,
+                              message, filename):
+        self._error_log._receiveGeneric(domain, type, level, line, message,
+                                        filename)
+
+    def _clear_error_log(self):
+        self._error_log.clear()
+
+    @property
+    def error_log(self):
+        u"The log of validation errors and warnings."
+        assert self._error_log is not None, "XPath evaluator not initialised"
+        return self._error_log.copy()
+
+from .xpath import XPath, ETXPath, XPathElementEvaluator, XPathDocumentEvaluator
+from .xpath import XPathSyntaxError, XPathEvaluator
+from .parser import XMLParser, ParseError, ParserError, XMLSyntaxError
+from .parser import get_default_parser, set_default_parser
+from .xslt import LIBXSLT_VERSION, LIBXSLT_COMPILED_VERSION
+from .xslt import XSLT, XSLTAccessControl, XSLTParseError, XSLTApplyError
+from .xsltext import XSLTExtension
+
+from .xmlid import XMLID, XMLDTDID, parseid
+from .xinclude import XInclude
+from .cleanup import cleanup_namespaces
+from .cleanup import strip_elements, strip_attributes, strip_tags
+
+from .dtd import DTD, DTDParseError
+from .relaxng import RelaxNG, RelaxNGParseError
+from .xmlschema import XMLSchema, XMLSchemaParseError
+from .schematron import Schematron, SchematronParseError

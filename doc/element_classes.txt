@@ -303,7 +303,7 @@ And here is how to use it:
 
   >>> a.honking       # id does not match !
   Traceback (most recent call last):
-  AttributeError: 'lxml.etree._Element' object has no attribute 'honking'
+  AttributeError: '_Element' object has no attribute 'honking'
 
   >>> a[0].honking
   False
@@ -497,7 +497,7 @@ implementation:
   >>> print(honk_element[0].honking)
   Traceback (most recent call last):
   ...
-  AttributeError: 'lxml.etree._Element' object has no attribute 'honking'
+  AttributeError: '_Element' object has no attribute 'honking'
 
 You can therefore provide one implementation per element name in each
 namespace and have lxml select the right one on the fly.  If you want one
