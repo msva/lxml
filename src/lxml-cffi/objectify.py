@@ -647,13 +647,18 @@ class StringElement(ObjectifiedDataElement):
             return text
         return text + other
 
+    def __radd__(self, other):
+        text  = _strValueOf(self)
+        other = _strValueOf(other)
+        if text is None:
+            return other
+        if other is None:
+            return text
+        return other + text
+
     def __mul__(self, other):
-        if isinstance(self, StringElement):
-            return textOf(self._c_node) * _numericValueOf(other)
-        elif isinstance(other, StringElement):
-            return _numericValueOf(self) * textOf(other._c_node)
-        else:
-            raise TypeError, u"invalid types for * operator"
+        return textOf(self._c_node) * _numericValueOf(other)
+    __rmul__ = __mul__
 
     def __mod__(self, other):
         return _strValueOf(self) % other

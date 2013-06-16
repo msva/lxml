@@ -760,6 +760,7 @@ class ObjectifyTestCase(HelperTestCase):
         root = self.Element('root')
         root.a = 5
         root.b = 6
+        import gc; gc.collect()
         self.assertTrue(isinstance(root, objectify.ObjectifiedElement))
         self.assertTrue(isinstance(root.a, objectify.IntElement))
         self.assertTrue(isinstance(root.b, objectify.IntElement))
@@ -844,6 +845,7 @@ class ObjectifyTestCase(HelperTestCase):
         SubElement = self.etree.SubElement
         root = Element("{objectified}root")
         root.s = "test"
+        import gc; gc.collect()
 
         self.assertEqual("test" * 5, root.s * 5)
         self.assertEqual(5 * "test", 5 * root.s)
@@ -856,6 +858,7 @@ class ObjectifyTestCase(HelperTestCase):
         SubElement = self.etree.SubElement
         root = Element("{objectified}root")
         root.s = "test"
+        import gc; gc.collect()
 
         s = "toast"
         self.assertEqual("test" + s, root.s + s)
@@ -952,6 +955,7 @@ class ObjectifyTestCase(HelperTestCase):
         SubElement = self.etree.SubElement
         root = Element("{objectified}root")
         root.s = _str("test")
+        import gc; gc.collect()
 
         self.assertEqual(_str("test") * 5, root.s * 5)
         self.assertEqual(5 * _str("test"), 5 * root.s)
@@ -964,6 +968,7 @@ class ObjectifyTestCase(HelperTestCase):
         SubElement = self.etree.SubElement
         root = Element("{objectified}root")
         root.s = _str("test")
+        import gc; gc.collect()
 
         s = _str("toast")
         self.assertEqual(_str("test") + s, root.s + s)
