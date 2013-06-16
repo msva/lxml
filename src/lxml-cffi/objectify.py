@@ -312,6 +312,21 @@ def _findFollowingSibling(c_node, href, name, index):
         c_node = next(c_node)
     return tree.ffi.NULL
 
+def _findFollowingSibling(c_node, href, name, index):
+    if index >= 0:
+        next = cetree.nextElement
+    else:
+        index = -1 - index
+        next = cetree.previousElement
+    while c_node:
+        if c_node.type == tree.XML_ELEMENT_NODE and \
+               _tagMatches(c_node, href, name):
+            index = index - 1
+            if index < 0:
+                return c_node
+        c_node = next(c_node)
+    return tree.ffi.NULL
+
 def _lookupChild(parent, tag):
     c_node = parent._c_node
     ns, tag = cetree.getNsTagWithEmptyNs(tag)

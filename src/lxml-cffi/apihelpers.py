@@ -754,6 +754,48 @@ def _parentElement(c_node):
         return tree.ffi.NULL
     return c_node
 
+def _tagMatches(c_node, c_href, c_name):
+    u"""Tests if the node matches namespace URI and tag name.
+
+    A node matches if it matches both c_href and c_name.
+
+    A node matches c_href if any of the following is true:
+    * c_href is NULL
+    * its namespace is NULL and c_href is the empty string
+    * its namespace string equals the c_href string
+
+    A node matches c_name if any of the following is true:
+    * c_name is NULL
+    * its name string equals the c_name string
+    """
+    if not c_node:
+        return 0
+    if c_node.type != tree.XML_ELEMENT_NODE:
+        # not an element, only succeed if we match everything
+        return not c_name and not c_href
+    if not c_name:
+        if not c_href:
+            # always match
+            return 1
+        else:
+            c_node_href = _getNs(c_node)
+            if not c_node_href:
+                return c_href[0] == '\0'
+            else:
+                return tree.xmlStrcmp(c_node_href, c_href) == 0
+    elif not c_href:
+        if _getNs(c_node):
+            return 0
+        return c_node.name == c_name or tree.xmlStrcmp(c_node.name, c_name) == 0
+    elif c_node.name == c_name or tree.xmlStrcmp(c_node.name, c_name) == 0:
+        c_node_href = _getNs(c_node)
+        if not c_node_href:
+            return c_href[0] == '\0'
+        else:
+            return tree.xmlStrcmp(c_node_href, c_href) == 0
+    else:
+        return 0
+
 def _tagMatchesExactly(c_node, c_qname):
     u"""Tests if the node matches namespace URI and tag name.
 

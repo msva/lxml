@@ -6,8 +6,8 @@ import re
 from . import python
 from . import cetree
 from .includes import tree
-from .apihelpers import _getNs
-from .objectify import _tagMatches
+from .apihelpers import _getNs, _tagMatches
+from .objectify import _findFollowingSibling, _appendValue
 
 class _ObjectPath:
     pass
@@ -26,7 +26,6 @@ class ObjectPath(object):
         else:
             self._path = _parseObjectPathList(path)
             self._path_str = u'.'.join(path)
-        self._path_len = len(self._path)
         self._c_path = _buildObjectPathSegments(self._path)
         self.find = self.__call__
 
@@ -50,13 +49,12 @@ class ObjectPath(object):
             use_default = 1
         elif use_default > 1:
             raise TypeError, u"invalid number of arguments: needs one or two"
-        return _findObjectPath(root, self._c_path, self._path_len,
-                               default, use_default)
+        return _findObjectPath(root, self._c_path, default, use_default)
 
     def hasattr(self, root):
         u"hasattr(self, root)"
         try:
-            _findObjectPath(root, self._c_path, self._path_len, None, 0)
+            _findObjectPath(root, self._c_path, None, 0)
         except AttributeError:
             return False
         return True
@@ -68,7 +66,7 @@ class ObjectPath(object):
 
         If any of the children on the path does not exist, it is created.
         """
-        _createObjectPath(root, self._c_path, self._path_len, 1, value)
+        _createObjectPath(root, self._c_path, 1, value)
 
     def addattr(self, root, value):
         u"""addattr(self, root, value)
@@ -77,7 +75,7 @@ class ObjectPath(object):
 
         If any of the children on the path does not exist, it is created.
         """
-        _createObjectPath(root, self._c_path, self._path_len, 0, value)
+        _createObjectPath(root, self._c_path, 0, value)
 
 __MATCH_PATH_SEGMENT = re.compile(
     ur"(\.?)\s*(?:\{([^}]*)\})?\s*([^.{}\[\]\s]+)\s*(?:\[\s*([-0-9]+)\s*\])?",
@@ -158,12 +156,12 @@ def _buildObjectPathSegments(path_list):
     for href, name, index in path_list:
         c_path = _ObjectPath()
         c_path.href = href
-        c_path.name = name
+        c_path.name = tree.ffi.new("xmlChar[]", name)
         c_path.index = index
         c_path_segments.append(c_path)
     return c_path_segments
 
-def _findObjectPath(root, c_path, c_path_len, default_value, use_default):
+def _findObjectPath(root, c_path, default_value, use_default):
     u"""Follow the path to find the target element.
     """
     c_node = root._c_node
@@ -173,7 +171,8 @@ def _findObjectPath(root, c_path, c_path_len, default_value, use_default):
         c_href = _getNs(c_node)
     else:
         c_href = tree.ffi.new("xmlChar[]", c_href)
-    c_name = tree.ffi.new("xmlChar[]", c_name)
+    if isinstance(c_name, str):
+        c_name = tree.ffi.new("xmlChar[]", c_name)
     if not _tagMatches(c_node, c_href, c_name):
         if use_default:
             return default_value
@@ -182,24 +181,22 @@ def _findObjectPath(root, c_path, c_path_len, default_value, use_default):
                 u"root element does not match: need %s, got %s" % \
                 (cetree.namespacedNameFromNsName(c_href, c_name), root.tag)
 
-    while c_node is not NULL:
-        c_path_len -= 1
-        if c_path_len <= 0:
+    for c_path_item in c_path[1:]:
+        if not c_node:
             break
 
-        c_path += 1
-        if c_path[0].href is not NULL:
-            c_href = c_path[0].href # otherwise: keep parent namespace
-        c_name = tree.xmlDictExists(c_node.doc.dict, c_path[0].name, -1)
-        if c_name is NULL:
-            c_name = c_path[0].name
-            c_node = NULL
+        if c_path_item.href:
+            c_href = c_path_item.href # otherwise: keep parent namespace
+        c_name = tree.xmlDictExists(c_node.doc.dict, c_path_item.name, -1)
+        if not c_name:
+            c_name = c_path_item.name
+            c_node = tree.ffi.NULL
             break
-        c_index = c_path[0].index
+        c_index = c_path_item.index
         c_node = c_node.last if c_index < 0 else c_node.children
         c_node = _findFollowingSibling(c_node, c_href, c_name, c_index)
 
-    if c_node is not NULL:
+    if c_node:
         return cetree.elementFactory(root._doc, c_node)
     elif use_default:
         return default_value
@@ -207,12 +204,12 @@ def _findObjectPath(root, c_path, c_path_len, default_value, use_default):
         tag = cetree.namespacedNameFromNsName(c_href, c_name)
         raise AttributeError, u"no such child: " + tag
 
-def _createObjectPath(root, c_path, c_path_len, replace, value):
+def _createObjectPath(root, c_path, replace, value):
     u"""Follow the path to find the target element, build the missing children
     as needed and set the target element to 'value'.  If replace is true, an
     existing value is replaced, otherwise the new value is added.
     """
-    if c_path_len == 1:
+    if len(c_path) == 1:
         raise TypeError, u"cannot update root node"
 
     c_node = root._c_node
@@ -222,32 +219,31 @@ def _createObjectPath(root, c_path, c_path_len, replace, value):
         c_href = _getNs(c_node)
     else:
         c_href = tree.ffi.new("xmlChar[]", c_href)
-    c_name = tree.ffi.new("xmlChar[]", c_name)
+    if isinstance(c_name, str):
+        c_name = tree.ffi.new("xmlChar[]", c_name)
     if not _tagMatches(c_node, c_href, c_name):
         raise ValueError, \
             u"root element does not match: need %s, got %s" % \
             (cetree.namespacedNameFromNsName(c_href, c_name), root.tag)
 
-    while c_path_len > 1:
-        c_path_len -= 1
-        c_path += 1
-        if c_path[0].href is not NULL:
-            c_href = c_path[0].href # otherwise: keep parent namespace
-        c_index = c_path[0].index
-        c_name = tree.xmlDictExists(c_node.doc.dict, c_path[0].name, -1)
-        if c_name is NULL:
-            c_name = c_path[0].name
-            c_child = NULL
+    for c_path_item in c_path[1:]:
+        if c_path_item.href:
+            c_href = c_path_item.href # otherwise: keep parent namespace
+        c_index = c_path_item.index
+        c_name = tree.xmlDictExists(c_node.doc.dict, c_path_item.name, -1)
+        if not c_name:
+            c_name = c_path_item.name
+            c_child = tree.ffi.NULL
         else:
             c_child = c_node.last if c_index < 0 else c_node.children
             c_child = _findFollowingSibling(c_child, c_href, c_name, c_index)
 
-        if c_child is not NULL:
+        if c_child:
             c_node = c_child
         elif c_index != 0:
             raise TypeError, \
                 u"creating indexed path attributes is not supported"
-        elif c_path_len == 1:
+        elif c_path_item is c_path[-1]:
             _appendValue(cetree.elementFactory(root._doc, c_node),
                          cetree.namespacedNameFromNsName(c_href, c_name),
                          value)

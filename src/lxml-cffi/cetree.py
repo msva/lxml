@@ -13,6 +13,7 @@ from .apihelpers import (
     _setAttributeValue as setAttributeValue,
     _delAttributeFromNsName as delAttributeFromNsName,
     _setNodeText as setNodeText,
+    _setTailText as setTailText,
     _appendChild as appendChild,
     _rootNodeOrRaise as rootNodeOrRaise,
     _hasText as hasText,
@@ -36,6 +37,11 @@ def textOf(c_node):
     if not c_node:
         return None
     return _collectText(c_node.children)
+
+def tailOf(c_node):
+    if not c_node:
+        return None
+    return _collectText(c_node.next)
 
 def findOrBuildNodeNsPrefix(doc, c_node, href, prefix):
     if doc is None:
