@@ -93,6 +93,23 @@ class ObjectifiedElement(ElementBase):
     def __reduce__(self):
         return (fromstring, (etree.tostring(self),))
 
+    @property
+    def __dict__(self):
+        u"""A fake implementation for __dict__ to support dir() etc.
+
+        Note that this only considers the first child with a given name.
+        """
+        c_ns = cetree._getNs(self._c_node)
+        tag = u"{%s}*" % tree.ffi.string(c_ns) if c_ns else None
+        children = {}
+        for child in etree.ElementChildIterator(self, tag=tag):
+            if not c_ns and cetree._getNs(child._c_node):
+                continue
+            name = tree.ffi.string(child._c_node.name)
+            if name not in children:
+                children[name] = child
+        return children
+
     def __len__(self):
         u"""Count self and siblings with the same tag.
         """
@@ -546,8 +563,14 @@ class NumberElement(ObjectifiedDataElement):
     def __add__(self, other):
         return _numericValueOf(self) + _numericValueOf(other)
 
+    def __radd__(self, other):
+        return _numericValueOf(other) + _numericValueOf(self)
+
     def __sub__(self, other):
         return _numericValueOf(self) - _numericValueOf(other)
+
+    def __rsub__(self, other):
+        return _numericValueOf(other) - _numericValueOf(self)
 
     def __mul__(self, other):
         return _numericValueOf(self) * _numericValueOf(other)

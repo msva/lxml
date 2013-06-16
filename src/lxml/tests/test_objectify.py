@@ -385,6 +385,7 @@ class ObjectifyTestCase(HelperTestCase):
             root = self.Element('root')
             attrname = 'val'
             setattr(root, attrname, val)
+            import gc;gc.collect()
             result = getattr(root, attrname)
             self.assertEqual(val, result)
             self.assertEqual(type(val), type(result.pyval))
@@ -791,6 +792,7 @@ class ObjectifyTestCase(HelperTestCase):
         SubElement = self.etree.SubElement
         root = Element("{objectified}root")
         root.bool = True
+        import gc; gc.collect()
         self.assertEqual(root.bool, True)
         self.assertEqual(root.bool + root.bool, True + True)
         self.assertEqual(True + root.bool, True + root.bool)
@@ -801,6 +803,7 @@ class ObjectifyTestCase(HelperTestCase):
         self.assertTrue(isinstance(root.bool, objectify.BoolElement))
 
         root.bool = False
+        import gc; gc.collect()
         self.assertEqual(root.bool, False)
         self.assertEqual(root.bool + root.bool, False + False)
         self.assertEqual(False + root.bool, False + root.bool)
@@ -937,6 +940,7 @@ class ObjectifyTestCase(HelperTestCase):
         SubElement = self.etree.SubElement
         root = Element("{objectified}root")
         root.s = _str("test")
+        import gc; gc.collect()
         self.assertTrue(isinstance(root.s, objectify.StringElement))
 
     def test_type_ustr_intliteral(self):
@@ -944,6 +948,7 @@ class ObjectifyTestCase(HelperTestCase):
         SubElement = self.etree.SubElement
         root = Element("{objectified}root")
         root.s = _str("3")
+        import gc; gc.collect()
         self.assertTrue(isinstance(root.s, objectify.StringElement))
 
     def test_type_ustr_floatliteral(self):
@@ -951,6 +956,7 @@ class ObjectifyTestCase(HelperTestCase):
         SubElement = self.etree.SubElement
         root = Element("{objectified}root")
         root.s = _str("3.72")
+        import gc; gc.collect()
         self.assertTrue(isinstance(root.s, objectify.StringElement))
 
     def test_type_ustr_mul(self):
@@ -997,6 +1003,7 @@ class ObjectifyTestCase(HelperTestCase):
         SubElement = self.etree.SubElement
         root = Element("{objectified}root")
         root.none = 5
+        import gc; gc.collect()
         self.assertTrue(isinstance(root.none, objectify.IntElement))
 
     def test_data_element_int(self):
@@ -1013,6 +1020,7 @@ class ObjectifyTestCase(HelperTestCase):
         SubElement = self.etree.SubElement
         root = Element("{objectified}root")
         root.none = 5.5
+        import gc; gc.collect()
         self.assertTrue(isinstance(root.none, objectify.FloatElement))
 
     def test_data_element_float(self):
@@ -1264,8 +1272,10 @@ class ObjectifyTestCase(HelperTestCase):
         self.assertEqual(root.b[2], root.b[3])
         
         root.b = "test"
+        import gc; gc.collect()
         self.assertTrue(root.b)
         root.b = ""
+        import gc; gc.collect()
         self.assertFalse(root.b)
         self.assertEqual(root.b, "")
         self.assertEqual("", root.b)
@@ -1286,8 +1296,10 @@ class ObjectifyTestCase(HelperTestCase):
         self.assertNotEqual(root.b[0], "5")
 
         root.b = 5
+        import gc; gc.collect()
         self.assertTrue(root.b)
         root.b = 0
+        import gc; gc.collect()
         self.assertFalse(root.b)
         
     # float + long share the NumberElement implementation with int
@@ -1312,8 +1324,10 @@ class ObjectifyTestCase(HelperTestCase):
         self.assertTrue(5 > root.b[0])
 
         root.b = True
+        import gc; gc.collect()
         self.assertTrue(root.b)
         root.b = False
+        import gc; gc.collect()
         self.assertFalse(root.b)
 
     def test_type_none_cmp(self):
@@ -1993,6 +2007,8 @@ class ObjectifyTestCase(HelperTestCase):
         r = objectify.Element("{%s}root" % NAMESPACE, nsmap=NAMESPACE_MAP)
         time = datetime.now()
         r.date = time
+
+        import gc; gc.collect()
 
         self.assertTrue(isinstance(r.date, DatetimeElement))
         self.assertTrue(isinstance(r.date.pyval, datetime))
