@@ -155,7 +155,7 @@ def _buildObjectPathSegments(path_list):
     c_path_segments = []
     for href, name, index in path_list:
         c_path = _ObjectPath()
-        c_path.href = href
+        c_path.href = tree.ffi.new("xmlChar[]", href) if href else tree.ffi.NULL
         c_path.name = tree.ffi.new("xmlChar[]", name) if name else tree.ffi.NULL
         c_path.index = index
         c_path_segments.append(c_path)
@@ -169,10 +169,6 @@ def _findObjectPath(root, c_path, default_value, use_default):
     c_href = c_path[0].href
     if not c_href:
         c_href = _getNs(c_node)
-    else:
-        c_href = tree.ffi.new("xmlChar[]", c_href)
-    if isinstance(c_name, str):
-        c_name = tree.ffi.new("xmlChar[]", c_name)
     if not _tagMatches(c_node, c_href, c_name):
         if use_default:
             return default_value
@@ -217,10 +213,6 @@ def _createObjectPath(root, c_path, replace, value):
     c_href = c_path[0].href
     if not c_href:
         c_href = _getNs(c_node)
-    else:
-        c_href = tree.ffi.new("xmlChar[]", c_href)
-    if isinstance(c_name, str):
-        c_name = tree.ffi.new("xmlChar[]", c_name)
     if not _tagMatches(c_node, c_href, c_name):
         raise ValueError, \
             u"root element does not match: need %s, got %s" % \
