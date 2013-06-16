@@ -2575,7 +2575,6 @@ class ObjectifyTestCase(HelperTestCase):
 
 def test_suite():
     suite = unittest.TestSuite()
-    return suite
     suite.addTests([unittest.makeSuite(ObjectifyTestCase)])
     suite.addTests(doctest.DocTestSuite(objectify))
     if sys.version_info >= (2,4):

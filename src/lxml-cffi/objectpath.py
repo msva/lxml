@@ -267,3 +267,46 @@ def _createObjectPath(root, c_path, c_path_len, replace, value):
         _appendValue(cetree.elementFactory(root._doc, c_node.parent),
                      cetree.namespacedName(c_node), value)
 
+def _buildDescendantPaths(c_node, prefix_string):
+    u"""Returns a list of all descendant paths.
+    """
+    tag = cetree.namespacedName(c_node)
+    if prefix_string:
+        if prefix_string[-1] != u'.':
+            prefix_string += u'.'
+        prefix_string = prefix_string + tag
+    else:
+        prefix_string = tag
+    path = [prefix_string]
+    path_list = []
+    _recursiveBuildDescendantPaths(c_node, path, path_list)
+    return path_list
+
+def _recursiveBuildDescendantPaths(c_node, path, path_list):
+    u"""Fills the list 'path_list' with all descendant paths, initial prefix
+    being in the list 'path'.
+    """
+    tags = {}
+    path_list.append( u'.'.join(path) )
+    c_href = cetree._getNs(c_node)
+    c_child = c_node.children
+    while c_child:
+        while c_child.type != tree.XML_ELEMENT_NODE:
+            c_child = c_child.next
+            if not c_child:
+                return
+        if c_href is cetree._getNs(c_child):
+            tag = pyunicode(c_child.name)
+        elif c_href and not cetree._getNs(c_child):
+            # special case: parent has namespace, child does not
+            tag = u'{}' + tree.ffi.string(c_child.name)
+        else:
+            tag = cetree.namespacedName(c_child)
+        count = tags.get(tag, -1) + 1
+        tags[tag] = count
+        if count > 0:
+            tag += u'[%d]' % count
+        path.append(tag)
+        _recursiveBuildDescendantPaths(c_child, path, path_list)
+        del path[-1]
+        c_child = c_child.next

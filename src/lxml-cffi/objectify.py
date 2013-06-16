@@ -98,6 +98,21 @@ class ObjectifiedElement(ElementBase):
         """
         return _countSiblings(self._c_node)
 
+    def countchildren(self):
+        u"""countchildren(self)
+
+        Return the number of children of this element, regardless of their
+        name.
+        """
+        # copied from etree
+        c = 0
+        c_node = self._c_node.children
+        while c_node:
+            if cetree._isElement(c_node):
+                c = c + 1
+            c_node = c_node.next
+        return c
+
     def __getattr__(self, tag):
         u"""Return the (first) child with the given tag name.  If no namespace
         is provided, the child will be looked up in the same one as self.
@@ -244,6 +259,15 @@ class ObjectifiedElement(ElementBase):
             # normal index deletion
             sibling = self.__getitem__(key)
             parent.remove(sibling)
+
+    def descendantpaths(self, prefix=None):
+        u"""descendantpaths(self, prefix=None)
+
+        Returns a list of object path expressions for all descendants.
+        """
+        if prefix is not None and not python._isString(prefix):
+            prefix = u'.'.join(prefix)
+        return _buildDescendantPaths(self._c_node, prefix)
 
 def _tagMatches(c_node, c_href, c_name):
     if c_node.name != c_name:
@@ -1750,4 +1774,4 @@ def DataElement(_value, attrib=None, nsmap=None, _pytype=None, _xsi=None,
 ################################################################################
 # ObjectPath
 
-from .objectpath import ObjectPath
+from .objectpath import ObjectPath, _buildDescendantPaths

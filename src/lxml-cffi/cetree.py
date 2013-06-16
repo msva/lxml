@@ -3,6 +3,7 @@
 from .apihelpers import (
     _hasChild as hasChild,
     _attributeValueFromNsName as attributeValueFromNsName,
+    _namespacedName as namespacedName,
     _namespacedNameFromNsName as namespacedNameFromNsName,
     _getNsTag as getNsTag,
     _getNsTagWithEmptyNs as getNsTagWithEmptyNs,
