@@ -7,7 +7,7 @@ from . import python
 from . import cetree
 from .includes import tree
 from .apihelpers import _getNs, _tagMatches
-from .objectify import _findFollowingSibling, _appendValue
+from .objectify import _findFollowingSibling, _appendValue, _replaceElement
 
 class _ObjectPath:
     pass
