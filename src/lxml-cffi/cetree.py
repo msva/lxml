@@ -10,6 +10,7 @@ from .apihelpers import (
     _nextElement as nextElement,
     _previousElement as previousElement,
     _makeElement as makeElement,
+    _makeSubElement as makeSubElement,
     _setAttributeValue as setAttributeValue,
     _delAttributeFromNsName as delAttributeFromNsName,
     _setNodeText as setNodeText,

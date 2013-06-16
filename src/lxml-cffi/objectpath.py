@@ -252,7 +252,7 @@ def _createObjectPath(root, c_path, replace, value):
             child = cetree.makeSubElement(
                 cetree.elementFactory(root._doc, c_node),
                 cetree.namespacedNameFromNsName(c_href, c_name),
-                None, None, None, None)
+                None, None, None, None, None)
             c_node = child._c_node
 
     # if we get here, the entire path was already there

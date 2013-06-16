@@ -1035,7 +1035,7 @@ class _ObjectifyElementMakerCaller(object):
                 elementMaker = child
                 if elementMaker._element_factory is None:
                     cetree.makeSubElement(element, elementMaker._tag,
-                                          None, None, None, None)
+                                          None, None, None, None, None)
                 else:
                     childElement = elementMaker._element_factory(
                         elementMaker._tag)
