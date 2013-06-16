@@ -824,6 +824,7 @@ class ObjectifyTestCase(HelperTestCase):
         SubElement = self.etree.SubElement
         root = Element("{objectified}root")
         root.s = "test"
+        import gc; gc.collect()
         self.assertTrue(isinstance(root.s, objectify.StringElement))
 
     def test_type_str_intliteral(self):
@@ -831,6 +832,7 @@ class ObjectifyTestCase(HelperTestCase):
         SubElement = self.etree.SubElement
         root = Element("{objectified}root")
         root.s = "3"
+        import gc; gc.collect()
         self.assertTrue(isinstance(root.s, objectify.StringElement))
 
     def test_type_str_floatliteral(self):
@@ -838,6 +840,7 @@ class ObjectifyTestCase(HelperTestCase):
         SubElement = self.etree.SubElement
         root = Element("{objectified}root")
         root.s = "3.72"
+        import gc; gc.collect()
         self.assertTrue(isinstance(root.s, objectify.StringElement))
 
     def test_type_str_mul(self):
@@ -1084,6 +1087,7 @@ class ObjectifyTestCase(HelperTestCase):
             pass
         root = Element("{objectified}root")
         root.myfloat = MyFloat(5.5)
+        import gc; gc.collect()
         self.assertTrue(isinstance(root.myfloat, objectify.FloatElement))
         self.assertEqual(root.myfloat.get(objectify.PYTYPE_ATTRIBUTE), None)
 
@@ -2430,36 +2434,43 @@ class ObjectifyTestCase(HelperTestCase):
     def test_efactory_int(self):
         E = objectify.E
         root = E.root(E.val(23))
+        import gc; gc.collect()
         self.assertTrue(isinstance(root.val, objectify.IntElement))
 
     def test_efactory_float(self):
         E = objectify.E
         root = E.root(E.val(233.23))
+        import gc; gc.collect()
         self.assertTrue(isinstance(root.val, objectify.FloatElement))
 
     def test_efactory_str(self):
         E = objectify.E
         root = E.root(E.val("what?"))
+        import gc; gc.collect()
         self.assertTrue(isinstance(root.val, objectify.StringElement))
 
     def test_efactory_unicode(self):
         E = objectify.E
         root = E.root(E.val(_str("blöödy häll", encoding="ISO-8859-1")))
+        import gc; gc.collect()
         self.assertTrue(isinstance(root.val, objectify.StringElement))
 
     def test_efactory_bool(self):
         E = objectify.E
         root = E.root(E.val(True))
+        import gc; gc.collect()
         self.assertTrue(isinstance(root.val, objectify.BoolElement))
 
     def test_efactory_none(self):
         E = objectify.E
         root = E.root(E.val(None))
+        import gc; gc.collect()
         self.assertTrue(isinstance(root.val, objectify.NoneElement))
 
     def test_efactory_value_concatenation(self):
         E = objectify.E
         root = E.root(E.val(1, "foo", 2.0, "bar ", True, None))
+        import gc; gc.collect()
         self.assertTrue(isinstance(root.val, objectify.StringElement))
 
     def test_efactory_attrib(self):
@@ -2472,6 +2483,7 @@ class ObjectifyTestCase(HelperTestCase):
         DataElement = objectify.DataElement
         root = E.root("text", E.sub(E.subsub()), "tail", DataElement(1),
                       DataElement(2.0))
+        import gc; gc.collect()
         self.assertTrue(isinstance(root, objectify.ObjectifiedElement))
         self.assertEqual(root.text, "text")
         self.assertTrue(isinstance(root.sub, objectify.ObjectifiedElement))

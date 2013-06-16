@@ -291,8 +291,8 @@ def _recursiveBuildDescendantPaths(c_node, path, path_list):
             c_child = c_child.next
             if not c_child:
                 return
-        if c_href is cetree._getNs(c_child):
-            tag = pyunicode(c_child.name)
+        if c_href == cetree._getNs(c_child):
+            tag = tree.ffi.string(c_child.name)
         elif c_href and not cetree._getNs(c_child):
             # special case: parent has namespace, child does not
             tag = u'{}' + tree.ffi.string(c_child.name)
