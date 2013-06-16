@@ -156,7 +156,7 @@ def _buildObjectPathSegments(path_list):
     for href, name, index in path_list:
         c_path = _ObjectPath()
         c_path.href = href
-        c_path.name = tree.ffi.new("xmlChar[]", name)
+        c_path.name = tree.ffi.new("xmlChar[]", name) if name else tree.ffi.NULL
         c_path.index = index
         c_path_segments.append(c_path)
     return c_path_segments
