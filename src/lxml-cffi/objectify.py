@@ -1490,24 +1490,24 @@ def _annotate_element(c_node, doc,
     if annotate_xsi:
         if typename is None or istree:
             cetree.delAttributeFromNsName(
-                c_node, XML_SCHEMA_INSTANCE_NS, "type")
+                c_node, XML_SCHEMA_INSTANCE_NS_UTF8, "type")
         else:
             # update or create attribute
             typename_utf8 = cetree.utf8(typename)
             c_ns = cetree.findOrBuildNodeNsPrefix(
-                doc, c_node, XML_SCHEMA_NS, 'xsd')
-            if c_ns is not NULL:
+                doc, c_node, XML_SCHEMA_NS_UTF8, 'xsd')
+            if c_ns:
                 if b':' in typename_utf8:
                     prefix, name = typename_utf8.split(b':', 1)
-                    if c_ns.prefix is NULL or c_ns.prefix[0] == '\0':
+                    if not c_ns.prefix or c_ns.prefix[0] == '\0':
                         typename_utf8 = name
                     elif tree.xmlStrcmp(_xcstr(prefix), c_ns.prefix) != 0:
-                        typename_utf8 = (c_ns.prefix) + b':' + name
-                elif c_ns.prefix is not NULL or c_ns.prefix[0] != '\0':
-                    typename_utf8 = (c_ns.prefix) + b':' + typename_utf8
+                        typename_utf8 = tree.ffi.string(c_ns.prefix) + b':' + name
+                elif c_ns.prefix and c_ns.prefix[0] != '\0':
+                    typename_utf8 = tree.ffi.string(c_ns.prefix) + b':' + typename_utf8
             c_ns = cetree.findOrBuildNodeNsPrefix(
                 doc, c_node, _XML_SCHEMA_INSTANCE_NS, 'xsi')
-            tree.xmlSetNsProp(c_node, c_ns, "type", _xcstr(typename_utf8))
+            tree.xmlSetNsProp(c_node, c_ns, "type", typename_utf8)
 
     if annotate_pytype:
         if pytype is None:
