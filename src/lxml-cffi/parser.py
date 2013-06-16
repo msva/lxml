@@ -501,8 +501,7 @@ def _handleParseResult(context, c_ctxt, result, filename, recover):
                 not context._validator.isvalid():
             well_formed = 0 # actually not 'valid', but anyway ...
         elif recover or (c_ctxt.wellFormed and
-                         c_ctxt.lastError.level in (xmlerror.XML_ERR_NONE,
-                                                    xmlerror.XML_ERR_WARNING)):
+                         c_ctxt.lastError.level < xmlerror.XML_ERR_ERROR):
             well_formed = 1
         elif not c_ctxt.replaceEntities and not c_ctxt.validate \
                  and context is not None:
@@ -885,14 +884,13 @@ class _FeedParser(_BaseParser):
             else:
                 buffer_len = py_buffer_len
             if self._for_html:
-                error = _htmlCtxtResetPush(pctxt, c_data, buffer_len,
-                                           c_encoding, self._parse_options)
+                error = _htmlCtxtResetPush(
+                    pctxt, xmlparser.ffi.NULL, 0,
+                    c_encoding, self._parse_options)
             else:
                 xmlparser.xmlCtxtUseOptions(pctxt, self._parse_options)
                 error = xmlparser.xmlCtxtResetPush(
-                    pctxt, c_data, buffer_len, xmlparser.ffi.NULL, c_encoding)
-            py_buffer_len -= buffer_len
-            c_data = c_data[buffer_len:]
+                    pctxt, xmlparser.ffi.NULL, 0, xmlparser.ffi.NULL, c_encoding)
 
         #print pctxt.charset, 'NONE' if c_encoding is NULL else c_encoding
 
