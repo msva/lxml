@@ -682,6 +682,8 @@ operators:
     16
 
     >>> root.a = 2
+    >>> import gc; gc.collect()
+    0
     >>> print(root.a + 2)
     4
     >>> print(1 + root.a)
@@ -690,6 +692,8 @@ operators:
     >>> print(root.c)
     True
     >>> root.c = False
+    >>> import gc; gc.collect()
+    0
     >>> if not root.c:
     ...     print("false!")
     false!
@@ -697,6 +701,8 @@ operators:
     >>> print(root.d + " test !")
     hoi test !
     >>> root.d = "%s - %s"
+    >>> import gc; gc.collect()
+    0
     >>> print(root.d % (1234, 12345))
     1234 - 12345
 
@@ -758,6 +764,8 @@ to change values, just assign them directly to the attribute:
     >>> root.a = 25
     >>> print(root.a)
     25
+    >>> import gc; gc.collect()
+    0
     >>> print(root.a.pyval)
     25
 
@@ -807,18 +815,24 @@ You can freely switch between different types for the same child:
         a = 5 [IntElement]
 
     >>> root.a = 'nice string!'
+    >>> import gc; gc.collect()
+    0
     >>> print(objectify.dump(root))
     root = None [ObjectifiedElement]
         a = 'nice string!' [StringElement]
           * py:pytype = 'str'
 
     >>> root.a = True
+    >>> import gc; gc.collect()
+    0
     >>> print(objectify.dump(root))
     root = None [ObjectifiedElement]
         a = True [BoolElement]
           * py:pytype = 'bool'
 
     >>> root.a = [1, 2, 3]
+    >>> import gc; gc.collect()
+    0
     >>> print(objectify.dump(root))
     root = None [ObjectifiedElement]
         a = 1 [IntElement]
@@ -829,6 +843,8 @@ You can freely switch between different types for the same child:
           * py:pytype = 'int'
 
     >>> root.a = (1, 2, 3)
+    >>> import gc; gc.collect()
+    0
     >>> print(objectify.dump(root))
     root = None [ObjectifiedElement]
         a = 1 [IntElement]
@@ -1049,6 +1065,8 @@ and/or 'xsi:type' information:
           * xsi:type = 'xsd:string'
           * py:pytype = 'str'
     >>> objectify.deannotate(root)
+    >>> import gc; gc.collect()
+    0
     >>> print(objectify.dump(root))
     root = None [ObjectifiedElement]
         d = 5 [IntElement]
@@ -1086,6 +1104,8 @@ arguments 'pytype' (default: True) and 'xsi' (default: True).
           * xsi:nil = 'true'
           * py:pytype = 'NoneType'
     >>> objectify.deannotate(root, xsi_nil=True)
+    >>> import gc; gc.collect()
+    0
     >>> print(objectify.dump(root))
     root = None [ObjectifiedElement]
         d = 5 [IntElement]
@@ -1325,6 +1345,8 @@ To unregister a type, call its ``unregister()`` method:
     >>> root.a.call_santa()
     Ho ho ho!
     >>> xmas_type.unregister()
+    >>> import gc; gc.collect()
+    0
     >>> root.a.call_santa()
     Traceback (most recent call last):
       ...
