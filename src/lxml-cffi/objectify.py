@@ -239,7 +239,7 @@ class ObjectifiedElement(ElementBase):
             else:
                 c_node = self._c_node.parent.children
             c_node = _findFollowingSibling(
-                c_node, tree._getNs(self._c_node), self._c_node.name, key)
+                c_node, cetree._getNs(self._c_node), self._c_node.name, key)
             if not c_node:
                 raise IndexError, unicode(key)
             element = elementFactory(self._doc, c_node)
@@ -472,9 +472,9 @@ def _setSlice(sliceobject, target, items):
             else:
                 c_node = parent._c_node.last
             c_node = _findFollowingSibling(
-                c_node, tree._getNs(target._c_node), target._c_node.name,
+                c_node, cetree._getNs(target._c_node), target._c_node.name,
                 sliceobject.start - 1)
-            if c_node is NULL:
+            if not c_node:
                 while pos < len(new_items):
                     cetree.appendChild(parent, new_items[pos])
                     pos += 1
