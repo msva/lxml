@@ -1209,6 +1209,23 @@ def _dump(element, indent):
 ################################################################################
 # Pickle support for objectified ElementTree
 
+def __unpickleElementTree(data):
+    return etree.ElementTree(fromstring(data))
+
+def _setupPickle(elementTreeReduceFunction):
+    if python.IS_PYTHON3:
+        import copyreg
+    else:
+        import copy_reg as copyreg
+    copyreg.pickle(etree._ElementTree,
+                   elementTreeReduceFunction, __unpickleElementTree)
+
+def pickleReduceElementTree(obj):
+    return (__unpickleElementTree, (etree.tostring(obj),))
+
+_setupPickle(pickleReduceElementTree)
+del pickleReduceElementTree
+
 ################################################################################
 # Element class lookup
 
