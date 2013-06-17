@@ -13,6 +13,7 @@ from .docloader import (
 from .xmlerror import _ErrorLog, ErrorTypes
 from .etree import LxmlSyntaxError, LxmlError, _documentFactory
 from .etree import _LIBXML_VERSION_INT
+import io
 
 HTMLParser = None # XXX HACK
 
@@ -172,7 +173,6 @@ _GLOBAL_PARSER_CONTEXT.initMainParserContext()
 
 # name of Python unicode encoding as known to libxml2
 _UNICODE_ENCODING = None
-# XXX THIS IS NOT USED BY PYPY
 
 def _setupPythonUnicode():
     u"""Sets _UNICODE_ENCODING to the internal encoding name of Python unicode
@@ -180,7 +180,42 @@ def _setupPythonUnicode():
     on iconv and the local Python installation, so we simply check if we find
     a matching encoding handler.
     """
-    # This is not used by PYPY: internal unicode buffer is not accessible.
+    buf = xmlparser.ffi.new("wchar_t[]", u"<test/>")
+    enc = _findEncodingName(xmlparser.ffi.cast("const xmlChar*", buf),
+                            xmlparser.ffi.sizeof(buf))
+
+    if not enc:
+        buf = xmlparser.ffi.buffer(buf, 4)[0:4]
+        # apparently, libxml2 can't detect UTF-16 on some systems
+        if buf == b'<\0t\0':
+            enc = "UTF-16LE"
+        elif buf == b'\0<\0t':
+            enc = "UTF-16BE"
+        else:
+            # not my fault, it's YOUR broken system :)
+            return
+    enchandler = tree.xmlFindCharEncodingHandler(enc)
+    if enchandler:
+        global _UNICODE_ENCODING
+        tree.xmlCharEncCloseFunc(enchandler)
+        _UNICODE_ENCODING = enc
+
+def _findEncodingName(buf, length):
+    u"Work around bug in libxml2: find iconv name of encoding on our own."
+    enc = tree.xmlDetectCharEncoding(buf, length)
+    if enc == tree.XML_CHAR_ENCODING_UTF16LE:
+        return "UTF-16LE"
+    elif enc == tree.XML_CHAR_ENCODING_UTF16BE:
+        return "UTF-16BE"
+    elif enc == tree.XML_CHAR_ENCODING_UCS4LE:
+        return "UCS-4LE"
+    elif enc == tree.XML_CHAR_ENCODING_UCS4BE:
+        return "UCS-4BE"
+    elif enc == tree.XML_CHAR_ENCODING_NONE:
+        return tree.ffi.NULL
+    else:
+        # returns a constant char*, no need to free it
+        return tree.xmlGetCharEncodingName(enc)
 
 _setupPythonUnicode()
 
@@ -748,6 +783,38 @@ class _BaseParser(object):
 
     # internal parser methods
 
+    def _parseUnicodeDoc(self, utext, c_filename):
+        u"""Parse unicode document, share dictionary if possible.
+        """
+        buf = xmlparser.ffi.new("wchar_t[]", utext)
+        buffer_len = xmlparser.ffi.sizeof(buf) - xmlparser.ffi.sizeof("wchar_t")
+
+        context = self._getParserContext()
+        context.prepare()
+        try:
+            pctxt = context._c_ctxt
+            _GLOBAL_PARSER_CONTEXT.initParserDict(pctxt)
+
+            orig_options = pctxt.options
+            if 1:
+                if self._for_html:
+                    result = htmlparser.htmlCtxtReadMemory(
+                        pctxt, buf, buffer_len, c_filename, _UNICODE_ENCODING,
+                        self._parse_options)
+                    if result:
+                        if _fixHtmlDictNames(pctxt.dict, result) < 0:
+                            tree.xmlFreeDoc(result)
+                            result = tree.ffi.NULL
+                else:
+                    result = xmlparser.xmlCtxtReadMemory(
+                        pctxt, buf, buffer_len, c_filename, _UNICODE_ENCODING,
+                        self._parse_options)
+            pctxt.options = orig_options # work around libxml2 problem
+
+            return context._handleParseResultDoc(self, result, None)
+        finally:
+            context.cleanup()
+
     def _parseDoc(self, text, c_filename):
         u"""Parse document, share dictionary if possible.
         """
@@ -774,7 +841,7 @@ class _BaseParser(object):
                     if result:
                         if _fixHtmlDictNames(pctxt.dict, result) < 0:
                             tree.xmlFreeDoc(result)
-                            result = NULL
+                            result = tree.ffi.NULL
                 else:
                     result = xmlparser.xmlCtxtReadMemory(
                         pctxt, text, len(text), c_filename,
@@ -1170,10 +1237,9 @@ def _parseDoc(text, filename, parser):
         filename_utf = _encodeFilenameUTF8(filename)
         c_filename = filename_utf
     if isinstance(text, unicode):
-        c_len = python.PyUnicode_GET_DATA_SIZE(text)
-        if c_len > limits.INT_MAX:
+        if len(text) * tree.ffi.sizeof("wchar_t") > limits.INT_MAX:
             return parser._parseDocFromFilelike(
-                StringIO(text), filename)
+                io.StringIO(text), filename)
         return parser._parseUnicodeDoc(text, c_filename)
     else:
         c_len = python.PyBytes_GET_SIZE(text)
@@ -1289,8 +1355,6 @@ def _parseMemoryDocument(text, url, parser):
         # pass native unicode only if libxml2 can handle it
         if not _UNICODE_ENCODING:
             text = text.encode('utf8')
-            if parser:
-                parser._default_encoding = 'utf8'
     elif not isinstance(text, bytes):
         raise ValueError, u"can only parse strings"
     if isinstance(url, unicode):

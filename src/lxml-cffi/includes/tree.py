@@ -367,6 +367,8 @@ ffi.cdef("""
 
     typedef int (* xmlCharEncodingOutputFunc)(unsigned char *out, int *outlen,
                                           const unsigned char *in, int *inlen);
+    xmlCharEncoding xmlDetectCharEncoding(const unsigned char *in,
+					 int len);
 
     int xmlValidateNCName	(const xmlChar *value,
 					 int space);
