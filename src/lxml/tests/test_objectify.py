@@ -2426,43 +2426,36 @@ class ObjectifyTestCase(HelperTestCase):
     def test_efactory_int(self):
         E = objectify.E
         root = E.root(E.val(23))
-        import gc; gc.collect()
         self.assertTrue(isinstance(root.val, objectify.IntElement))
 
     def test_efactory_float(self):
         E = objectify.E
         root = E.root(E.val(233.23))
-        import gc; gc.collect()
         self.assertTrue(isinstance(root.val, objectify.FloatElement))
 
     def test_efactory_str(self):
         E = objectify.E
         root = E.root(E.val("what?"))
-        import gc; gc.collect()
         self.assertTrue(isinstance(root.val, objectify.StringElement))
 
     def test_efactory_unicode(self):
         E = objectify.E
         root = E.root(E.val(_str("blöödy häll", encoding="ISO-8859-1")))
-        import gc; gc.collect()
         self.assertTrue(isinstance(root.val, objectify.StringElement))
 
     def test_efactory_bool(self):
         E = objectify.E
         root = E.root(E.val(True))
-        import gc; gc.collect()
         self.assertTrue(isinstance(root.val, objectify.BoolElement))
 
     def test_efactory_none(self):
         E = objectify.E
         root = E.root(E.val(None))
-        import gc; gc.collect()
         self.assertTrue(isinstance(root.val, objectify.NoneElement))
 
     def test_efactory_value_concatenation(self):
         E = objectify.E
         root = E.root(E.val(1, "foo", 2.0, "bar ", True, None))
-        import gc; gc.collect()
         self.assertTrue(isinstance(root.val, objectify.StringElement))
 
     def test_efactory_attrib(self):
@@ -2475,7 +2468,6 @@ class ObjectifyTestCase(HelperTestCase):
         DataElement = objectify.DataElement
         root = E.root("text", E.sub(E.subsub()), "tail", DataElement(1),
                       DataElement(2.0))
-        import gc; gc.collect()
         self.assertTrue(isinstance(root, objectify.ObjectifiedElement))
         self.assertEqual(root.text, "text")
         self.assertTrue(isinstance(root.sub, objectify.ObjectifiedElement))

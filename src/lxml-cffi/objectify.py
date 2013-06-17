@@ -1059,6 +1059,7 @@ class _ObjectifyElementMakerCaller(object):
                 has_string_value = 1
             elif isinstance(child, _Element):
                 cetree.appendChild(element, child)
+                detachProxy(child)
                 has_children = 1
             elif isinstance(child, _ObjectifyElementMakerCaller):
                 elementMaker = child
