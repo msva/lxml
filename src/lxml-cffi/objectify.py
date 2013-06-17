@@ -6,6 +6,7 @@ import re
 
 from .etree import ElementBase, ElementClassLookup, _Element
 from .etree import _elementFactory as elementFactory
+from .proxy import getProxy, detachProxy
 from . import etree
 from . import cetree
 from . import python
@@ -387,6 +388,7 @@ def _replaceElement(element, value):
         new_element = element.makeelement(element.tag)
         _setElementValue(new_element, value)
     element.getparent().replace(element, new_element)
+    detachProxy(new_element)
 
 def _appendValue(parent, tag, value):
     if isinstance(value, _Element):
@@ -403,6 +405,7 @@ def _appendValue(parent, tag, value):
             tag, None, parent._doc, None, None, None, None, None, None)
         _setElementValue(new_element, value)
         cetree.appendChild(parent, new_element)
+        detachProxy(new_element)
 
 def _setElementValue(element, value):
     if value is None:
@@ -494,6 +497,7 @@ def _setSlice(sliceobject, target, items):
             if not c_node:
                 while pos < len(new_items):
                     cetree.appendChild(parent, new_items[pos])
+                    detachProxy(new_items[pos])
                     pos += 1
                 return
             item = cetree.elementFactory(parent._doc, c_node)
@@ -502,6 +506,8 @@ def _setSlice(sliceobject, target, items):
             item = new_items[pos]
             add(item)
             pos += 1
+    for new_item in new_items:
+        detachProxy(new_item)
 
 ################################################################################
 # Data type support in subclasses
@@ -1448,6 +1454,9 @@ def _annotate(element, annotate_xsi, annotate_pytype,
             _annotate_element(c_node, doc, annotate_xsi, annotate_pytype,
                               ignore_xsi, ignore_pytype,
                               empty_type_name, empty_pytype, StrType, NoneType)
+            proxy = getProxy(c_node)
+            if proxy is not None and proxy is not element:
+                detachProxy(proxy)
 
 def _annotate_element(c_node, doc,
                       annotate_xsi, annotate_pytype,
@@ -1570,8 +1579,6 @@ def _annotate_element(c_node, doc,
                 c_ns = cetree.findOrBuildNodeNsPrefix(
                     doc, c_node, _XML_SCHEMA_INSTANCE_NS, 'xsi')
                 tree.xmlSetNsProp(c_node, c_ns, "nil", "true")
-
-    return 0
 
 _strip_attributes = etree.strip_attributes
 _cleanup_namespaces = etree.cleanup_namespaces

@@ -49,6 +49,10 @@ def _updateProxyDocument(element, doc):
     """
     element._doc = doc
 
+def detachProxy(proxy):
+    _unregisterProxy(proxy)
+    proxy._c_node = tree.ffi.NULL
+
 ################################################################################
 # temporarily make a node the root node of its document
 

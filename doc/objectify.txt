@@ -682,8 +682,6 @@ operators:
     16
 
     >>> root.a = 2
-    >>> import gc; gc.collect()
-    0
     >>> print(root.a + 2)
     4
     >>> print(1 + root.a)
@@ -692,8 +690,6 @@ operators:
     >>> print(root.c)
     True
     >>> root.c = False
-    >>> import gc; gc.collect()
-    0
     >>> if not root.c:
     ...     print("false!")
     false!
@@ -701,8 +697,6 @@ operators:
     >>> print(root.d + " test !")
     hoi test !
     >>> root.d = "%s - %s"
-    >>> import gc; gc.collect()
-    0
     >>> print(root.d % (1234, 12345))
     1234 - 12345
 
@@ -764,8 +758,6 @@ to change values, just assign them directly to the attribute:
     >>> root.a = 25
     >>> print(root.a)
     25
-    >>> import gc; gc.collect()
-    0
     >>> print(root.a.pyval)
     25
 
@@ -815,24 +807,18 @@ You can freely switch between different types for the same child:
         a = 5 [IntElement]
 
     >>> root.a = 'nice string!'
-    >>> import gc; gc.collect()
-    0
     >>> print(objectify.dump(root))
     root = None [ObjectifiedElement]
         a = 'nice string!' [StringElement]
           * py:pytype = 'str'
 
     >>> root.a = True
-    >>> import gc; gc.collect()
-    0
     >>> print(objectify.dump(root))
     root = None [ObjectifiedElement]
         a = True [BoolElement]
           * py:pytype = 'bool'
 
     >>> root.a = [1, 2, 3]
-    >>> import gc; gc.collect()
-    0
     >>> print(objectify.dump(root))
     root = None [ObjectifiedElement]
         a = 1 [IntElement]
@@ -843,8 +829,6 @@ You can freely switch between different types for the same child:
           * py:pytype = 'int'
 
     >>> root.a = (1, 2, 3)
-    >>> import gc; gc.collect()
-    0
     >>> print(objectify.dump(root))
     root = None [ObjectifiedElement]
         a = 1 [IntElement]
