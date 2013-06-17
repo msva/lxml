@@ -1,7 +1,7 @@
 # iterparse -- event-driven parsing
 from .parser import _BaseParser, _ParserContext, _GLOBAL_PARSER_CONTEXT
 from .parser import _XML_DEFAULT_PARSE_OPTIONS
-from .parser import _raiseParseError, _fixHtmlDictNodeNames
+from .parser import _raiseParseError, _fixHtmlDictNodeNames, _htmlCtxtResetPush
 from .apihelpers import _encodeFilename, _getFilenameForFile, funicode
 from .apihelpers import _rootNodeOrRaise, _findChildForwards
 from .includes import xmlparser, xmlerror, tree, htmlparser

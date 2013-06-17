@@ -235,7 +235,7 @@ class _FileReaderContext:
         if self._encoding is None:
             c_encoding = xmlparser.ffi.NULL
         else:
-            c_encoding = _cstr(self._encoding)
+            c_encoding = self._encoding
 
         c_read_callback  = _readFilelikeParser
 
@@ -745,6 +745,8 @@ class _BaseParser(object):
         """
         return _makeElement(_tag, tree.ffi.NULL, None, self, None, None,
                             attrib, nsmap, _extra)
+
+    # internal parser methods
 
     def _parseDoc(self, text, c_filename):
         u"""Parse document, share dictionary if possible.
@@ -1287,6 +1289,8 @@ def _parseMemoryDocument(text, url, parser):
         # pass native unicode only if libxml2 can handle it
         if not _UNICODE_ENCODING:
             text = text.encode('utf8')
+            if parser:
+                parser._default_encoding = 'utf8'
     elif not isinstance(text, bytes):
         raise ValueError, u"can only parse strings"
     if isinstance(url, unicode):
