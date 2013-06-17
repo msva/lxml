@@ -145,9 +145,9 @@ def _handleSaxStart(ctxt, c_localname, c_prefix,
                     else:
                         value = ''
                 else:
-                    value = str(buffer(xmlparser.ffi.buffer(
-                                c_attributes[3],
-                                c_attributes[4] - c_attributes[3])))
+                    value = xmlparser.ffi.buffer(
+                        c_attributes[3],
+                        c_attributes[4] - c_attributes[3])[:]
                     value = value.decode('utf8')
                 attrib[name] = value
                 c_attributes += 5
@@ -242,7 +242,7 @@ def _handleSaxData(ctxt, c_data, data_len):
     if context._origSaxData:
         context._origSaxData(c_ctxt, c_data, data_len)
     try:
-        data = str(buffer(xmlparser.ffi.buffer(c_data, data_len)))
+        data = xmlparser.ffi.buffer(c_data, data_len)[:]
         data = data.decode('utf8')
         context._target._handleSaxData(data)
     except:
@@ -257,7 +257,7 @@ def _handleSaxCData(ctxt, c_data, data_len):
     if context._origSaxCData:
         context._origSaxCData(c_ctxt, c_data, data_len)
     try:
-        data = str(buffer(xmlparser.ffi.buffer(c_data, data_len)))
+        data = xmlparser.ffi.buffer(c_data, data_len)[:]
         context._target._handleSaxData(data.decode('utf8'))
     except:
         context._handleSaxException(c_ctxt)

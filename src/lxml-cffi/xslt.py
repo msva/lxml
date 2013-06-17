@@ -594,7 +594,7 @@ class _XSLTResultTree(_ElementTree):
         if r == -1:
             raise MemoryError()
         try:
-            return str(buffer(xslt.ffi.buffer(s_ptr[0], l_ptr[0])))
+            return xslt.ffi.buffer(s_ptr[0], l_ptr[0])[:]
         finally:
             tree.xmlFree(s_ptr[0])
 

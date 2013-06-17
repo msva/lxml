@@ -67,14 +67,14 @@ def _textToString(c_node, encoding, with_tail):
                     needs_conversion = 1
 
         if needs_conversion:
-            text = str(buffer(tree.ffi.string(
-                        c_text, tree.xmlBufferLength(c_buffer)))).decode('utf8')
+            text = tree.ffi.buffer(
+                c_text, tree.xmlBufferLength(c_buffer))[:].decode('utf8')
             if encoding is not unicode:
                 encoding = _utf8(encoding)
                 text = text.encode(encoding)
         else:
-            text = str(buffer(tree.ffi.string(
-                        c_text, tree.xmlBufferLength(c_buffer))))
+            text = tree.ffi.buffer(
+                c_text, tree.xmlBufferLength(c_buffer))[:]
     finally:
         tree.xmlBufferFree(c_buffer)
     return text
@@ -131,13 +131,13 @@ def _tostring(element, encoding, doctype, method,
 
     try:
         if encoding is unicode:
-            result = str(buffer(tree.ffi.buffer(
-                        tree.xmlBufferContent(c_result_buffer),
-                        tree.xmlBufferLength(c_result_buffer)))).decode('UTF-8')
+            result = tree.ffi.buffer(
+                tree.xmlBufferContent(c_result_buffer),
+                tree.xmlBufferLength(c_result_buffer))[:].decode('UTF-8')
         else:
-            result = str(buffer(tree.ffi.buffer(
-                        tree.xmlBufferContent(c_result_buffer),
-                        tree.xmlBufferLength(c_result_buffer))))
+            result = tree.ffi.buffer(
+                tree.xmlBufferContent(c_result_buffer),
+                tree.xmlBufferLength(c_result_buffer))[:]
     finally:
         error_result = tree.xmlOutputBufferClose(c_buffer)
     if error_result < 0:
@@ -173,7 +173,7 @@ def _tostringC14N(element_or_tree, exclusive, with_comments, inclusive_ns_prefix
             tree.xmlFree(c_buffer)
         raise C14NError, u"C14N failed"
     try:
-        result = str(buffer(c14n.ffi.buffer(c_buffer, byte_count)))
+        result = c14n.ffi.buffer(c_buffer, byte_count)[:]
     finally:
         tree.xmlFree(c_buffer)
     return result
@@ -369,7 +369,7 @@ class _FilelikeWriter:
         try:
             if self._filelike is None:
                 raise IOError, u"File is already closed"
-            py_buffer = str(buffer(tree.ffi.buffer(c_buffer, size)))
+            py_buffer = tree.ffi.buffer(c_buffer, size)[:]
             self._filelike.write(py_buffer)
             return size
         except:
