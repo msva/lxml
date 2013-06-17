@@ -171,7 +171,7 @@ def getDeallocationTop(c_node):
 
 def canDeallocateChildNodes(c_parent):
     c_node = c_parent.children
-    for c_node in FOR_EACH_ELEMENT_FROM(c_parent, c_node, 1):
+    for c_node in FOR_EACH_ELEMENT_FROM(c_parent, c_parent, 0):
         if c_node._private:
             return 0
     return 1
@@ -331,8 +331,7 @@ def moveNodeToDocument(doc, c_source_doc, c_element):
     return 0
 
 def fixElementDocument(c_element, doc, proxy_count):
-    c_node = c_element
-    for c_node in FOR_EACH_FROM(c_element, c_node, 1):
+    for c_node in FOR_EACH_FROM(c_element, c_element, 1):
         proxy = getProxy(c_node)
         if proxy is not None:
             _updateProxyDocument(proxy, doc)
@@ -357,8 +356,7 @@ def fixThreadDictNames(c_element, c_src_dict, c_dict):
         fixThreadDictNamesForNode(c_element, c_src_dict, c_dict)
 
 def fixThreadDictNamesForNode(c_element, c_src_dict, c_dict):
-    c_node = c_element
-    for c_node in FOR_EACH_FROM(c_element, c_node, 1):
+    for c_node in FOR_EACH_FROM(c_element, c_element, 1):
         if c_node.name:
             fixThreadDictNameForNode(c_node, c_src_dict, c_dict)
         if c_node.type in (tree.XML_ELEMENT_NODE, tree.XML_XINCLUDE_START):

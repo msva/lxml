@@ -2257,14 +2257,6 @@ def _attributeIteratorFactory(element, keysvalues):
     attribs._keysvalues = keysvalues
     return attribs
 
-def ForEachIterator(object):
-    def __init__(self, top_node):
-        self._top_node = top_node
-
-    def __next__(self):
-        return next(FOR_EACH_ELEMENT_FROM(serlf._top_node._c_node, c_node, 0))
-    next = __next__
-
 class _MultiTagMatcher(object):
     """
     Match an xmlNode against a list of tags.
@@ -2468,8 +2460,7 @@ class ElementDepthFirstIterator(object):
         self._next_node = node
         self._matcher = _MultiTagMatcher(tag)
         self._matcher.cacheTags(node._doc)
-        self.iterator = FOR_EACH_ELEMENT_FROM(self._top_node._c_node,
-                                              self._next_node._c_node, 0)
+        self.iterator = FOR_EACH_ELEMENT_FROM(node._c_node, node._c_node, 0)
         if not inclusive or not self._matcher.matches(node._c_node):
             # find start node (this cannot raise StopIteration, self._next_node != None)
             next(self)
