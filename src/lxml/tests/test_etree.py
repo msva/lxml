@@ -23,7 +23,7 @@ if this_dir not in sys.path:
 
 from common_imports import etree, StringIO, BytesIO, HelperTestCase, fileInTestDir, read_file
 from common_imports import SillyFileLike, LargeFileLikeUnicode, doctest, make_doctest
-from common_imports import canonicalize, sorted, _str, _bytes
+from common_imports import canonicalize, sorted, _str, _bytes, skipIf, IS_PYPY
 
 print("")
 print("TESTED VERSION: %s" % etree.__version__)
@@ -56,6 +56,7 @@ class ETreeOnlyTestCase(HelperTestCase):
         self.assertTrue(etree.__version__.startswith(
             str(etree.LXML_VERSION[0])))
 
+    @skipIf(IS_PYPY, "PyPy provides no C API")
     def test_c_api(self):
         if hasattr(self.etree, '__pyx_capi__'):
             # newer Pyrex compatible C-API
