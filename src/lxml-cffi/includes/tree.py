@@ -32,7 +32,7 @@ ffi.cdef("""
 		                         const xmlChar *name,
 		                         int len);
 
-    #define XML_XML_NAMESPACE ...
+    const char *XML_XML_NAMESPACE;
 
     typedef enum {
         XML_ELEMENT_NODE=		1,

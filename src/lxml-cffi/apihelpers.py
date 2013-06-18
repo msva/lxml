@@ -329,7 +329,7 @@ def _searchNsByHref(c_node, c_href, is_attribute):
     c_default_ns = tree.ffi.NULL
     if not c_href or not c_node or c_node.type == tree.XML_ENTITY_REF_NODE:
         return tree.ffi.NULL
-    if c_href == tree.XML_XML_NAMESPACE:
+    if c_href == tree.ffi.string(tree.XML_XML_NAMESPACE):
         # no special cases here, let libxml2 handle this
         return tree.xmlSearchNsByHref(c_node.doc, c_node, c_href)
     if c_node.type == tree.XML_ATTRIBUTE_NODE:
