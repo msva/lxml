@@ -29,10 +29,6 @@ class ObjectPath(object):
         self._c_path = _buildObjectPathSegments(self._path)
         self.find = self.__call__
 
-    def __dealloc__(self):
-        if self._c_path is not NULL:
-            python.PyMem_Free(self._c_path)
-
     def __str__(self):
         return self._path_str
 

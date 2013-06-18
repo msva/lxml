@@ -1,4 +1,4 @@
-from .etree import _TempStore, _ExceptionContext
+from .etree import _ExceptionContext
 from . import python
 from .apihelpers import _getFilenameForFile, _encodeFilename
 
@@ -134,11 +134,9 @@ class _ResolverRegistry:
 class _ResolverContext(_ExceptionContext):
     def clear(self):
         _ExceptionContext.clear(self)
-        self._storage.clear()
 
 def _initResolverContext(context, resolvers):
     if resolvers is None:
         context._resolvers = _ResolverRegistry()
     else:
         context._resolvers = resolvers
-    context._storage = _TempStore()

@@ -397,8 +397,6 @@ def _local_resolver(c_url, c_pubid, c_context):
             data = None
             c_input = xmlparser.ffi.NULL
 
-        if data is not None:
-            context._storage.add(data)
         if c_input:
             return c_input
 
@@ -596,7 +594,7 @@ def _fixHtmlDictNodeNames(c_dict, c_node):
     c_name = tree.xmlDictLookup(c_dict, c_node.name, -1)
     if not c_name:
         return -1
-    if c_name is not c_node.name:
+    if c_name != c_node.name:
         tree.xmlFree(c_node.name)
         c_node.name = c_name
     c_attr = c_node.properties
@@ -604,7 +602,7 @@ def _fixHtmlDictNodeNames(c_dict, c_node):
         c_name = tree.xmlDictLookup(c_dict, c_attr.name, -1)
         if not c_name:
             return -1
-        if c_name is not c_attr.name:
+        if c_name != c_attr.name:
             tree.xmlFree(c_attr.name)
             c_attr.name = c_name
         c_attr = c_attr.next
@@ -1029,8 +1027,8 @@ class _FeedParser(_BaseParser):
 def _htmlCtxtResetPush(c_ctxt, c_data, buffer_len,
                        c_encoding, parse_options):
     # libxml2 crashes if spaceTab is not initialised
-    if _LIBXML_VERSION_INT < 20629 and c_ctxt.spaceTab is NULL:
-        c_ctxt.spaceTab = tree.xmlMalloc(10 * sizeof(int))
+    if _LIBXML_VERSION_INT < 20629 and not c_ctxt.spaceTab:
+        c_ctxt.spaceTab = tree.xmlMalloc(10 * tree.ffi.sizeof("int"))
         c_ctxt.spaceMax = 10
 
     # libxml2 lacks an HTML push parser setup function

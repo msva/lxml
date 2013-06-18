@@ -230,7 +230,7 @@ def _writeNodeToBuffer(c_buffer, c_node, encoding, c_doctype,
         tree.xmlNodeDumpOutput(
             c_buffer, c_doc, c_nsdecl_node, 0, pretty_print, encoding)
 
-    if c_nsdecl_node is not c_node:
+    if c_nsdecl_node != c_node:
         # clean up
         c_nsdecl_node.children = c_nsdecl_node.last = tree.ffi.NULL
         tree.xmlFreeNode(c_nsdecl_node)

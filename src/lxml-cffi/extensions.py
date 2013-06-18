@@ -1,6 +1,6 @@
 import re
 
-from .etree import _ExceptionContext, _TempStore, LxmlError
+from .etree import _ExceptionContext, LxmlError
 from .includes.etree_defs import _isElement
 from . import python
 from .includes import xpath, tree, xmlerror
@@ -80,7 +80,6 @@ class _BaseContext:
         self._exc        = _ExceptionContext()
         self._extensions = extensions
         self._namespaces = namespaces
-        self._temp_refs  = _TempStore()
         self._temp_documents  = set()
         self._build_smart_strings = build_smart_strings
 
@@ -260,7 +259,6 @@ class _BaseContext:
 
     def _release_temp_refs(self):
         u"Free temporarily referenced objects from this context."
-        self._temp_refs.clear()
         self._temp_documents.clear()
 
     def _hold(self, obj):
@@ -272,15 +270,12 @@ class _BaseContext:
         """
         from .etree import _Element
         if isinstance(obj, _Element):
-            self._temp_refs.add(obj)
             self._temp_documents.add(obj._doc)
             return
         elif _isString(obj) or not python.PySequence_Check(obj):
             return
         for o in obj:
             if isinstance(o, _Element):
-                #print "Holding element:", <int>element._c_node
-                self._temp_refs.add(o)
                 #print "Holding document:", <int>element._doc._c_doc
                 self._temp_documents.add(o._doc)
 
@@ -291,7 +286,7 @@ class _BaseContext:
         document instance.
         """
         for doc in self._temp_documents:
-            if doc is not None and doc._c_doc is c_node.doc:
+            if doc is not None and doc._c_doc == c_node.doc:
                 return doc
         return None
 

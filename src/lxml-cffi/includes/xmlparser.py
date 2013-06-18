@@ -105,6 +105,7 @@ ffi.cdef("""
         int             disableSAX;       /* SAX callbacks are disabled */
         int               inSubset;       /* Parsing is in int 1/ext 2 subset */
 
+        int                spaceMax;      /* Max depth of the parsing stack */
         int *              spaceTab;      /* array of space infos */
         int                progressive;   /* is this a progressive parsing */
         xmlDictPtr         dict;          /* dictionnary for the parser */

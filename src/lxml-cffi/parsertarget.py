@@ -98,7 +98,7 @@ class _TargetParserContext(_SaxParserContext):
 
     def _cleanupTargetParserContext(self, result):
         if self._c_ctxt.myDoc:
-            if self._c_ctxt.myDoc is not result and \
+            if self._c_ctxt.myDoc != result and \
                     not self._c_ctxt.myDoc._private:
                 # no _Document proxy => orphen
                 tree.xmlFreeDoc(self._c_ctxt.myDoc)

@@ -13,6 +13,7 @@ ffi.cdef("""
                                          const xmlChar *val);
     const char * xmlParserVersion;
 
+    void *xmlMalloc(size_t size);
     void xmlFree(void *mem);
     int xmlIsChar_ch(xmlChar ch);
 

@@ -117,7 +117,7 @@ def _fakeDocElementFactory(doc, c_element):
     instantiate the original node instead.
     """
     from .etree import _elementFactory
-    if c_element.doc is not doc._c_doc:
+    if c_element.doc != doc._c_doc:
         if c_element.doc._private:
             if c_element == c_element.doc.children:
                 c_element = tree.ffi.cast("xmlNodePtr", c_element.doc._private)

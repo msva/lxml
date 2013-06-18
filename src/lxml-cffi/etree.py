@@ -111,18 +111,6 @@ class LxmlSyntaxError(LxmlError, SyntaxError):
     """
     pass
 
-# class for temporary storage of Python references,
-# used e.g. for XPath results
-class _TempStore:
-    def __init__(self):
-        self._storage = []
-
-    def add(self, obj):
-        self._storage.append(obj)
-
-    def clear(self):
-        del self._storage[:]
-
 
 # class for temporarily storing exceptions raised in extensions
 class _ExceptionContext:
