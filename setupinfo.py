@@ -11,6 +11,12 @@ except ImportError:
     CYTHON_INSTALLED = False
 
 EXT_MODULES = ["lxml.etree", "lxml.objectify"]
+CFFI_MODULES = [
+    "uri", "xmlerror", "includes.c14n", "includes.dtdvalid",
+    "includes.htmlparser", "includes.relaxng", "includes.schematron",
+    "includes.tree", "includes.xinclude", "includes.xmlerror",
+    "includes.xmlschema", "includes.xmlparser", "includes.xpath",
+    "includes.xslt"]
 
 PACKAGE_PATH = "src%slxml%s" % (os.path.sep, os.path.sep)
 INCLUDE_PACKAGE_PATH = PACKAGE_PATH + 'includes'
@@ -126,7 +132,7 @@ def ext_modules(static_include_dirs, static_library_dirs,
         main_module_source = PACKAGE_PATH + module + source_extension
         result.append(
             Extension(
-                module,
+                module.replace('lxml.', ''),
                 sources = [main_module_source],
                 depends = find_dependencies(module),
                 extra_compile_args = _cflags,
@@ -137,6 +143,7 @@ def ext_modules(static_include_dirs, static_library_dirs,
                 runtime_library_dirs = runtime_library_dirs,
                 libraries = _libraries,
             ))
+
     if CYTHON_INSTALLED and OPTION_WITH_CYTHON_GDB:
         for ext in result:
             ext.cython_gdb = True
@@ -145,6 +152,15 @@ def ext_modules(static_include_dirs, static_library_dirs,
         # build .c files right now and convert Extension() objects
         from Cython.Build import cythonize
         result = cythonize(result)
+
+    import importlib
+    sys.path[0:0] = ['src']
+    # Break an import loop
+    import lxml.etree
+    for module in CFFI_MODULES:
+        ffi = importlib.import_module('lxml.' + module).ffi
+        result.append(ffi.verifier.get_extension())
+    del sys.path[0]
 
     return result
 
