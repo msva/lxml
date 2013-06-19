@@ -62,7 +62,9 @@ def ext_modules(static_include_dirs, static_library_dirs,
                 libxslt_version=OPTION_LIBXSLT_VERSION,
                 multicore=OPTION_MULTICORE)
 
-    if OPTION_WITHOUT_OBJECTIFY:
+    if OPTION_CFFI_ONLY:
+        modules = []
+    elif OPTION_WITHOUT_OBJECTIFY:
         modules = [ entry for entry in EXT_MODULES
                     if 'objectify' not in entry ]
     else:
@@ -400,3 +402,11 @@ OPTION_MULTICORE = option_value('multicore')
 OPTION_DOWNLOAD_DIR = option_value('download-dir')
 if OPTION_DOWNLOAD_DIR is None:
     OPTION_DOWNLOAD_DIR = 'libs'
+OPTION_CFFI_ONLY = has_option('cffi-only')
+
+try:
+    import __pypy__
+except ImportError:
+    pass
+else:
+    OPTION_CFFI_ONLY = True
