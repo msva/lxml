@@ -129,6 +129,7 @@ def setup_extra_options():
                     STATIC_INCLUDE_DIRS, STATIC_LIBRARY_DIRS,
                     STATIC_CFLAGS, STATIC_BINARIES)
     extra_opts['ext_modules'] = ext_modules
+    extra_opts['ext_package'] = 'lxml'
 
     packages = extra_opts.get('packages', list())
     package_dir = extra_opts.get('package_dir', dict())

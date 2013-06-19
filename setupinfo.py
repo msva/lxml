@@ -132,7 +132,7 @@ def ext_modules(static_include_dirs, static_library_dirs,
         main_module_source = PACKAGE_PATH + module + source_extension
         result.append(
             Extension(
-                module,
+                module.replace('lxml.', ''),
                 sources = [main_module_source],
                 depends = find_dependencies(module),
                 extra_compile_args = _cflags,
