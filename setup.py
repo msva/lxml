@@ -79,7 +79,8 @@ extra_options['package_dir'] = {
     }
 
 extra_options['packages'] = [
-        'lxml', 'lxml.includes', 'lxml.html', 'lxml.isoschematron'
+        'lxml', 'lxml.includes', 'lxml.html', 'lxml.isoschematron',
+        'lxml-cffi', 'lxml-cffi.includes',
     ]
 
 
