@@ -14,7 +14,8 @@ cdef class _ReadOnlyProxy:
     cdef int _assertNode(self) except -1:
         u"""This is our way of saying: this proxy is invalid!
         """
-        assert self._c_node is not NULL, u"Proxy invalidated!"
+        if not self._c_node:
+            raise ReferenceError("Proxy invalidated!")
         return 0
 
     cdef int _raise_unsupported_type(self):
@@ -108,7 +109,7 @@ cdef class _ReadOnlyProxy:
         cdef _node_to_node_function next_element
         cdef list result
         self._assertNode()
-        if python.PySlice_Check(x):
+        if isinstance(x, slice):
             # slicing
             if _isFullSlice(<slice>x):
                 return _collectChildren(self)
@@ -364,7 +365,7 @@ cdef _freeReadOnlyProxies(_ReadOnlyProxy sourceProxy):
 cdef class _OpaqueNodeWrapper:
     cdef tree.xmlNode* _c_node
     def __init__(self):
-        raise TypeError, u"This type cannot be instatiated from Python"
+        raise TypeError, u"This type cannot be instantiated from Python"
 
 @cython.final
 @cython.internal

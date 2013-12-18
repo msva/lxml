@@ -58,8 +58,7 @@ cdef const_xmlChar* _PYTYPE_ATTRIBUTE_NAME
 
 PYTYPE_ATTRIBUTE = None
 
-cdef object TREE_PYTYPE_NAME
-TREE_PYTYPE_NAME = u"TREE"
+cdef unicode TREE_PYTYPE_NAME = u"TREE"
 
 cdef tuple _unicodeAndUtf8(s):
     return (s, python.PyUnicode_AsUTF8String(s))
@@ -342,7 +341,6 @@ cdef class ObjectifiedElement(ElementBase):
             _replaceElement(element, value)
 
     def __delitem__(self, key):
-        cdef Py_ssize_t start, stop, step, slicelength
         parent = self.getparent()
         if parent is None:
             raise TypeError, u"deleting items not supported by root element"
@@ -682,7 +680,7 @@ cdef class NumberElement(ObjectifiedDataElement):
         return abs( _numericValueOf(self) )
 
     def __nonzero__(self):
-        return _numericValueOf(self) != 0
+        return bool(_numericValueOf(self))
 
     def __invert__(self):
         return ~ _numericValueOf(self)
@@ -736,10 +734,7 @@ cdef class StringElement(ObjectifiedDataElement):
             return len(text)
 
     def __nonzero__(self):
-        text = textOf(self._c_node)
-        if text is None:
-            return False
-        return len(text) > 0
+        return bool(textOf(self._c_node))
 
     def __richcmp__(self, other, int op):
         return _richcmpPyvals(self, other, op)
@@ -839,30 +834,30 @@ def __checkBool(s):
     if value == -1:
         raise ValueError
 
-cpdef __parseBool(s):
+cpdef bint __parseBool(s):
     cdef int value
     if s is None:
         return False
     value = __parseBoolAsInt(s)
     if value == -1:
         raise ValueError, u"Invalid boolean value: '%s'" % s
-    return <bint>value
+    return value
 
 cdef inline int __parseBoolAsInt(text):
-    if text == u'false':
+    if text == 'false':
         return 0
-    elif text == u'true':
+    elif text == 'true':
         return 1
-    elif text == u'0':
+    elif text == '0':
         return 0
-    elif text == u'1':
+    elif text == '1':
         return 1
     return -1
 
-cdef inline object _parseNumber(NumberElement element):
+cdef object _parseNumber(NumberElement element):
     return element._parse_value(textOf(element._c_node))
 
-cdef inline object _strValueOf(obj):
+cdef object _strValueOf(obj):
     if python._isString(obj):
         return obj
     if isinstance(obj, _Element):
@@ -871,17 +866,19 @@ cdef inline object _strValueOf(obj):
         return u''
     return unicode(obj)
 
-cdef inline object _numericValueOf(obj):
+cdef object _numericValueOf(obj):
     if isinstance(obj, NumberElement):
         return _parseNumber(<NumberElement>obj)
-    elif hasattr(obj, u'pyval'):
+    try:
         # not always numeric, but Python will raise the right exception
         return obj.pyval
+    except AttributeError:
+        pass
     return obj
 
-cdef inline _richcmpPyvals(left, right, int op):
-    left  = getattr(left,  u'pyval', left)
-    right = getattr(right, u'pyval', right)
+cdef _richcmpPyvals(left, right, int op):
+    left  = getattr(left,  'pyval', left)
+    right = getattr(right, 'pyval', right)
     return python.PyObject_RichCompare(left, right, op)
 
 
@@ -912,7 +909,7 @@ cdef class PyType:
     cdef list _schema_types
     def __init__(self, name, type_check, type_class, stringify=None):
         if isinstance(name, bytes):
-            name = (<bytes>name).encode('ascii')
+            name = (<bytes>name).decode('ascii')
         elif not isinstance(name, unicode):
             raise TypeError, u"Type name must be a string"
         if type_check is not None and not callable(type_check):
@@ -998,29 +995,15 @@ cdef class PyType:
             self._schema_types = list(map(unicode, types))
 
 
-cdef dict _PYTYPE_DICT
-_PYTYPE_DICT = {}
-
-cdef dict _SCHEMA_TYPE_DICT
-_SCHEMA_TYPE_DICT = {}
-
-cdef list _TYPE_CHECKS
-_TYPE_CHECKS = []
-
-cdef _lower_bool(b):
-    if b:
-        return u"true"
-    else:
-        return u"false"
+cdef dict _PYTYPE_DICT = {}
+cdef dict _SCHEMA_TYPE_DICT = {}
+cdef list _TYPE_CHECKS = []
 
 def __lower_bool(b):
-    return _lower_bool(b)
+    return u"true" if b else u"false"
 
 cdef _pytypename(obj):
-    if python._isString(obj):
-        return u"str"
-    else:
-        return _typename(obj)
+    return u"str" if python._isString(obj) else _typename(obj)
 
 def pytypename(obj):
     u"""pytypename(obj)
@@ -1064,8 +1047,7 @@ cdef _registerPyTypes():
     pytype.register()
 
 # non-registered PyType for inner tree elements
-cdef PyType TREE_PYTYPE
-TREE_PYTYPE = PyType(TREE_PYTYPE_NAME, None, ObjectifiedElement)
+cdef PyType TREE_PYTYPE = PyType(TREE_PYTYPE_NAME, None, ObjectifiedElement)
 
 _registerPyTypes()
 
@@ -1106,7 +1088,7 @@ cdef PyType _guessPyType(value, PyType defaulttype):
             type_check(value)
             return <PyType>tested_pytype
         except IGNORABLE_ERRORS:
-            # could not be parsed as the specififed type => ignore
+            # could not be parsed as the specified type => ignore
             pass
     return defaulttype
 
@@ -1114,7 +1096,7 @@ cdef object _guessElementClass(tree.xmlNode* c_node):
     value = textOf(c_node)
     if value is None:
         return None
-    if value == u'':
+    if value == '':
         return StringElement
     
     for type_check, pytype in _TYPE_CHECKS:
@@ -1139,7 +1121,6 @@ cdef class _ObjectifyElementMakerCaller:
     def __call__(self, *children, **attrib):
         u"__call__(self, *children, **attrib)"
         cdef _ObjectifyElementMakerCaller elementMaker
-        cdef python.PyObject* pytype
         cdef _Element element
         cdef _Element childElement
         cdef bint has_children
@@ -1173,13 +1154,24 @@ cdef class _ObjectifyElementMakerCaller:
                         elementMaker._tag)
                     cetree.appendChild(element, childElement)
                 has_children = 1
+            elif isinstance(child, dict):
+                for name, value in child.items():
+                    # keyword arguments in attrib take precedence
+                    if name in attrib:
+                        continue
+                    pytype = _PYTYPE_DICT.get(_typename(value))
+                    if pytype is not None:
+                        value = (<PyType>pytype).stringify(value)
+                    elif not python._isString(value):
+                        value = unicode(value)
+                    cetree.setAttributeValue(element, name, value)
             else:
                 if pytype_name is not None:
                     # concatenation always makes the result a string
                     has_string_value = 1
                 pytype_name = _typename(child)
-                pytype = python.PyDict_GetItem(_PYTYPE_DICT, pytype_name)
-                if pytype is not NULL:
+                pytype = _PYTYPE_DICT.get(_typename(child))
+                if pytype is not None:
                     _add_text(element, (<PyType>pytype).stringify(child))
                 else:
                     has_string_value = 1
@@ -1218,11 +1210,12 @@ cdef class ElementMaker:
     Example::
 
       >>> M = ElementMaker(annotate=False)
-      >>> html = M.html( M.body( M.p('hello', M.br, 'objectify') ) )
+      >>> attributes = {'class': 'par'}
+      >>> html = M.html( M.body( M.p('hello', attributes, M.br, 'objectify', style="font-weight: bold") ) )
 
       >>> from lxml.etree import tostring
       >>> print(tostring(html, method='html').decode('ascii'))
-      <html><body><p>hello<br>objectify</p></body></html>
+      <html><body><p style="font-weight: bold" class="par">hello<br>objectify</p></body></html>
 
     To create tags that are not valid Python identifiers, call the factory
     directly and pass the tag name as first argument::
@@ -1243,15 +1236,9 @@ cdef class ElementMaker:
     def __init__(self, *, namespace=None, nsmap=None, annotate=True,
                  makeelement=None):
         if nsmap is None:
-            if annotate:
-                nsmap = _DEFAULT_NSMAP
-            else:
-                nsmap = {}
+            nsmap = _DEFAULT_NSMAP if annotate else {}
         self._nsmap = nsmap
-        if namespace is None:
-            self._namespace = None
-        else:
-            self._namespace = u"{%s}" % namespace
+        self._namespace = None if namespace is None else u"{%s}" % namespace
         self._annotate = annotate
         if makeelement is not None:
             assert callable(makeelement)
@@ -1293,8 +1280,7 @@ cdef class ElementMaker:
 ################################################################################
 # Recursive element dumping
 
-cdef bint __RECURSIVE_STR
-__RECURSIVE_STR = 0 # default: off
+cdef bint __RECURSIVE_STR = 0 # default: off
 
 def enable_recursive_str(on=True):
     u"""enable_recursive_str(on=True)
@@ -1595,7 +1581,7 @@ cdef int _annotate_element(tree.xmlNode* c_node, _Document doc,
 
     # if element is defined as xsi:nil, represent it as None
     if cetree.attributeValueFromNsName(
-        c_node, _XML_SCHEMA_INSTANCE_NS, <unsigned char*>"nil") == u"true":
+        c_node, _XML_SCHEMA_INSTANCE_NS, <unsigned char*>"nil") == "true":
         pytype = NoneType
 
     if  pytype is None and not ignore_xsi:
@@ -1630,9 +1616,9 @@ cdef int _annotate_element(tree.xmlNode* c_node, _Document doc,
                     # everything else is clear enough
                     pytype = TREE_PYTYPE
             else:
-                if old_pytypename == u'none':
+                if old_pytypename == 'none':
                     # transition from lxml 1.x
-                    old_pytypename = u"NoneType"
+                    old_pytypename = "NoneType"
                 dict_result = python.PyDict_GetItem(
                     _PYTYPE_DICT, old_pytypename)
                 if dict_result is not NULL:
@@ -1686,7 +1672,7 @@ cdef int _annotate_element(tree.xmlNode* c_node, _Document doc,
                         typename_utf8 = name
                     elif tree.xmlStrcmp(_xcstr(prefix), c_ns.prefix) != 0:
                         typename_utf8 = (<unsigned char*>c_ns.prefix) + b':' + name
-                elif c_ns.prefix is not NULL or c_ns.prefix[0] != c'\0':
+                elif c_ns.prefix is not NULL and c_ns.prefix[0] != c'\0':
                     typename_utf8 = (<unsigned char*>c_ns.prefix) + b':' + typename_utf8
             c_ns = cetree.findOrBuildNodeNsPrefix(
                 doc, c_node, _XML_SCHEMA_INSTANCE_NS, <unsigned char*>'xsi')
@@ -1850,9 +1836,9 @@ def parse(f, parser=None, *, base_url=None):
     return _parse(f, parser, base_url=base_url)
 
 cdef dict _DEFAULT_NSMAP = {
-    u"py"  : PYTYPE_NAMESPACE,
-    u"xsi" : XML_SCHEMA_INSTANCE_NS,
-    u"xsd" : XML_SCHEMA_NS
+    "py"  : PYTYPE_NAMESPACE,
+    "xsi" : XML_SCHEMA_INSTANCE_NS,
+    "xsd" : XML_SCHEMA_NS
 }
 
 E = ElementMaker()
@@ -1867,6 +1853,7 @@ def Element(_tag, attrib=None, nsmap=None, *, _pytype=None, **_attributes):
     """
     if attrib is not None:
         if python.PyDict_Size(_attributes):
+            attrib = dict(attrib)
             attrib.update(_attributes)
         _attributes = attrib
     if _pytype is None:

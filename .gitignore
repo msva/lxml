@@ -2,10 +2,17 @@
 *.pyc
 __pycache__
 .tox
+.idea
 build
+dist
+doc/html
 libs
 *.egg-info
+*.pdb
 *.so
+*.o
+*.pyd
+
 src/lxml/includes/lxml-version.h
 src/lxml/lxml.etree.c
 src/lxml/lxml.etree.h

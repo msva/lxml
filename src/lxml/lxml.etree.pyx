@@ -89,8 +89,8 @@ import sys
 cdef object re
 import re
 
-cdef object gzip
-import gzip
+cdef object islice
+from itertools import islice
 
 cdef object ITER_EMPTY = iter(())
 
@@ -206,7 +206,7 @@ class C14NError(LxmlError):
 
 # version information
 cdef __unpackDottedVersion(version):
-    cdef list version_list = []
+    version_list = []
     l = (version.decode("ascii").replace(u'-', u'.').split(u'.') + [0]*4)[:4]
     for item in l:
         try:
@@ -312,6 +312,8 @@ include "xmlerror.pxi"     # Error and log handling
 ################################################################################
 # Public Python API
 
+@cython.final
+@cython.freelist(8)
 cdef public class _Document [ type LxmlDocumentType, object LxmlDocument ]:
     u"""Internal base class to reference a libxml document.
 
@@ -468,8 +470,7 @@ cdef tuple __initPrefixCache():
     return tuple([ python.PyBytes_FromFormat("ns%d", i)
                    for i in range(30) ])
 
-cdef tuple _PREFIX_CACHE
-_PREFIX_CACHE = __initPrefixCache()
+cdef tuple _PREFIX_CACHE = __initPrefixCache()
 
 cdef _Document _documentFactory(xmlDoc* c_doc, _BaseParser parser):
     cdef _Document result
@@ -483,6 +484,7 @@ cdef _Document _documentFactory(xmlDoc* c_doc, _BaseParser parser):
     return result
 
 
+@cython.freelist(4)
 cdef class DocInfo:
     u"Document information provided by parser and DTD."
     cdef _Document _doc
@@ -580,6 +582,7 @@ cdef class DocInfo:
             return _dtdFactory(self._doc._c_doc.extSubset)
 
 
+@cython.freelist(16)
 cdef public class _Element [ type LxmlElementType, object LxmlElement ]:
     u"""Element class.
 
@@ -624,7 +627,7 @@ cdef public class _Element [ type LxmlElementType, object LxmlElement ]:
         _assertValidNode(self)
         if value is None:
             raise ValueError, u"cannot assign None"
-        if python.PySlice_Check(x):
+        if isinstance(x, slice):
             # slice assignment
             _findChildSlice(<slice>x, self._c_node, &c_node, &step, &slicelength)
             if step > 0:
@@ -659,7 +662,7 @@ cdef public class _Element [ type LxmlElementType, object LxmlElement ]:
         cdef xmlNode* c_next
         cdef Py_ssize_t step = 0, slicelength = 0
         _assertValidNode(self)
-        if python.PySlice_Check(x):
+        if isinstance(x, slice):
             # slice deletion
             if _isFullSlice(<slice>x):
                 c_node = self._c_node.children
@@ -903,8 +906,7 @@ cdef public class _Element [ type LxmlElementType, object LxmlElement ]:
         keys(), values() and items() to access element attributes.
         """
         def __get__(self):
-            _assertValidNode(self)
-            return _Attrib(self)
+            return _Attrib.__new__(_Attrib, self)
 
     property text:
         u"""Text before the first subelement. This is either a string or 
@@ -959,14 +961,11 @@ cdef public class _Element [ type LxmlElementType, object LxmlElement ]:
             cdef long line
             _assertValidNode(self)
             line = tree.xmlGetLineNo(self._c_node)
-            if line > 0:
-                return line
-            else:
-                return None
+            return line if line > 0 else None
 
         def __set__(self, line):
             _assertValidNode(self)
-            if line < 0:
+            if line <= 0:
                 self._c_node.line = 0
             else:
                 self._c_node.line = line
@@ -982,15 +981,15 @@ cdef public class _Element [ type LxmlElementType, object LxmlElement ]:
         def __get__(self):
             cdef xmlNode* c_node
             cdef xmlNs* c_ns
-            cdef dict nsmap = {}
             _assertValidNode(self)
+            nsmap = {}
             c_node = self._c_node
             while c_node is not NULL and c_node.type == tree.XML_ELEMENT_NODE:
                 c_ns = c_node.nsDef
                 while c_ns is not NULL:
-                    prefix = None if c_ns.prefix is NULL else funicode(c_ns.prefix)
+                    prefix = funicodeOrNone(c_ns.prefix)
                     if prefix not in nsmap:
-                        nsmap[prefix] = None if c_ns.href is NULL else funicode(c_ns.href)
+                        nsmap[prefix] = funicodeOrNone(c_ns.href)
                     c_ns = c_ns.next
                 c_node = c_node.parent
             return nsmap
@@ -1014,8 +1013,10 @@ cdef public class _Element [ type LxmlElementType, object LxmlElement ]:
                 if self._doc._c_doc.URL is NULL:
                     return None
                 return _decodeFilename(self._doc._c_doc.URL)
-            base = _decodeFilename(c_base)
-            tree.xmlFree(c_base)
+            try:
+                base = _decodeFilename(c_base)
+            finally:
+                tree.xmlFree(c_base)
             return base
 
         def __set__(self, url):
@@ -1042,7 +1043,7 @@ cdef public class _Element [ type LxmlElementType, object LxmlElement ]:
         cdef _node_to_node_function next_element
         cdef list result
         _assertValidNode(self)
-        if python.PySlice_Check(x):
+        if isinstance(x, slice):
             # slicing
             if _isFullSlice(<slice>x):
                 return _collectChildren(self)
@@ -1058,8 +1059,8 @@ cdef public class _Element [ type LxmlElementType, object LxmlElement ]:
             c = 0
             while c_node is not NULL and c < slicelength:
                 result.append(_elementFactory(self._doc, c_node))
-                c = c + 1
-                for i from 0 <= i < step:
+                c += 1
+                for i in range(step):
                     c_node = next_element(c_node)
             return result
         else:
@@ -1377,13 +1378,14 @@ cdef public class _Element [ type LxmlElementType, object LxmlElement ]:
         pass ``"{ns}localname"`` as tag. Either or both of ``ns`` and
         ``localname`` can be ``*`` for a wildcard; ``ns`` can be empty
         for no namespace. ``"localname"`` is equivalent to ``"{}localname"``
-        but ``"*"`` is ``"{*}*"``, not ``"{}*"``.
+        (i.e. no namespace) but ``"*"`` is ``"{*}*"`` (any or no namespace),
+        not ``"{}*"``.
 
         You can also pass the Element, Comment, ProcessingInstruction and
         Entity factory functions to look only for the specific element type.
 
-        Passing a sequence of tags will let the iterator return all
-        elements matching any of these tags, in document order.
+        Passing more than one tag will let the iterator return all elements
+        matching any of these tags, in document order.
         """
         if tag is not None:
             tags += (tag,)
@@ -1530,14 +1532,11 @@ cdef class __ContentOnlyElement(_Element):
     property attrib:
         def __get__(self):
             return {}
-        
+
     property text:
         def __get__(self):
             _assertValidNode(self)
-            if self._c_node.content is NULL:
-                return ''
-            else:
-                return funicode(self._c_node.content)
+            return funicodeOrEmpty(self._c_node.content)
 
         def __set__(self, value):
             cdef tree.xmlDict* c_dict
@@ -1552,7 +1551,7 @@ cdef class __ContentOnlyElement(_Element):
     # ACCESSORS
     def __getitem__(self, x):
         u"__getitem__(self, x)"
-        if python.PySlice_Check(x):
+        if isinstance(x, slice):
             return []
         else:
             raise IndexError, u"list index out of range"
@@ -1649,7 +1648,7 @@ cdef class _Entity(__ContentOnlyElement):
         def __set__(self, value):
             _assertValidNode(self)
             value_utf = _utf8(value)
-            if u'&' in value or u';' in value:
+            if b'&' in value_utf or b';' in value_utf:
                 raise ValueError(u"Invalid entity name '%s'" % value)
             tree.xmlNodeSetName(self._c_node, _xcstr(value_utf))
 
@@ -1664,6 +1663,7 @@ cdef class _Entity(__ContentOnlyElement):
         return u"&%s;" % self.name
 
 
+@cython.freelist(8)
 cdef class QName:
     u"""QName(text_or_uri_or_element, tag=None)
 
@@ -1684,9 +1684,9 @@ cdef class QName:
     languages like SOAP or XML-Schema that use prefixed tag names in
     their text content.
     """
-    cdef readonly object text
-    cdef readonly object localname
-    cdef readonly object namespace
+    cdef readonly unicode text
+    cdef readonly unicode localname
+    cdef readonly unicode namespace
     def __init__(self, text_or_uri_or_element, tag=None):
         if not _isString(text_or_uri_or_element):
             if isinstance(text_or_uri_or_element, _Element):
@@ -1716,18 +1716,23 @@ cdef class QName:
     def __str__(self):
         return self.text
     def __hash__(self):
-        return self.text.__hash__()
+        return hash(self.text)
     def __richcmp__(one, other, int op):
         try:
-            if not _isString(one):
+            if type(one) is QName:
+                one = (<QName>one).text
+            elif not isinstance(one, unicode):
                 one = unicode(one)
-            if not _isString(other):
+            if type(other) is QName:
+                other = (<QName>other).text
+            elif not isinstance(other, unicode):
                 other = unicode(other)
-        except ValueError:
+        except (ValueError, UnicodeDecodeError):
             return NotImplemented
         return python.PyObject_RichCompare(one, other, op)
 
 
+@cython.freelist(8)
 cdef public class _ElementTree [ type LxmlElementTreeType,
                                  object LxmlElementTree ]:
     cdef _Document _doc
@@ -1757,7 +1762,7 @@ cdef public class _ElementTree [ type LxmlElementTreeType,
             self._context_node = doc.getroot()
             if self._context_node is None:
                 self._doc = doc
-        except _TargetParserResult, result_container:
+        except _TargetParserResult as result_container:
             # raises a TypeError if we don't get an _Element
             self._context_node = result_container.result
         return self._context_node
@@ -1967,7 +1972,7 @@ cdef public class _ElementTree [ type LxmlElementTreeType,
         """
         root = self.getroot()
         if root is None:
-            return ()
+            return ITER_EMPTY
         if tag is not None:
             tags += (tag,)
         return root.getiterator(*tags)
@@ -1983,7 +1988,7 @@ cdef public class _ElementTree [ type LxmlElementTreeType,
         """
         root = self.getroot()
         if root is None:
-            return ()
+            return ITER_EMPTY
         if tag is not None:
             tags += (tag,)
         return root.iter(*tags)
@@ -2208,6 +2213,7 @@ cdef _ElementTree _newElementTree(_Document doc, _Element context_node,
     return result
 
 
+@cython.freelist(16)
 cdef class _Attrib:
     u"""A dict-like proxy for the ``Element.attrib`` property.
     """
@@ -2578,6 +2584,16 @@ cdef class _MultiTagMatcher:
                     return True
         return False
 
+    cdef inline bint matchesNsTag(self, const_xmlChar* c_href,
+                                  const_xmlChar* c_name):
+        cdef qname* c_qname
+        if self._node_types & (1 << tree.XML_ELEMENT_NODE):
+            return True
+        for c_qname in self._cached_tags[:self._tag_count]:
+            if _nsTagMatchesExactly(c_href, c_name, c_qname):
+                return True
+        return False
+
     cdef inline bint matchesAttribute(self, xmlAttr* c_attr):
         """Attribute matches differ from Element matches in that they do
         not care about node types.
@@ -2849,6 +2865,7 @@ def ProcessingInstruction(target, text=None):
 
 PI = ProcessingInstruction
 
+@cython.freelist(8)
 cdef class CDATA:
     u"""CDATA(data)
 
@@ -2914,7 +2931,7 @@ def ElementTree(_Element element=None, *, file=None, _BaseParser parser=None):
     elif file is not None:
         try:
             doc = _parseDocument(file, parser, None)
-        except _TargetParserResult, result_container:
+        except _TargetParserResult as result_container:
             return result_container.result
     else:
         c_doc = _newXMLDoc()
@@ -2944,7 +2961,7 @@ def HTML(text, _BaseParser parser=None, *, base_url=None):
     try:
         doc = _parseMemoryDocument(text, base_url, parser)
         return doc.getroot()
-    except _TargetParserResult, result_container:
+    except _TargetParserResult as result_container:
         return result_container.result
 
 def XML(text, _BaseParser parser=None, *, base_url=None):
@@ -2972,7 +2989,7 @@ def XML(text, _BaseParser parser=None, *, base_url=None):
     try:
         doc = _parseMemoryDocument(text, base_url, parser)
         return doc.getroot()
-    except _TargetParserResult, result_container:
+    except _TargetParserResult as result_container:
         return result_container.result
 
 def fromstring(text, _BaseParser parser=None, *, base_url=None):
@@ -2992,7 +3009,7 @@ def fromstring(text, _BaseParser parser=None, *, base_url=None):
     try:
         doc = _parseMemoryDocument(text, base_url, parser)
         return doc.getroot()
-    except _TargetParserResult, result_container:
+    except _TargetParserResult as result_container:
         return result_container.result
 
 def fromstringlist(strings, _BaseParser parser=None):
@@ -3196,7 +3213,7 @@ def parse(source, _BaseParser parser=None, *, base_url=None):
     try:
         doc = _parseDocument(source, parser, base_url)
         return _elementTreeFactory(doc, None)
-    except _TargetParserResult, result_container:
+    except _TargetParserResult as result_container:
         return result_container.result
 
 
@@ -3207,7 +3224,7 @@ include "readonlytree.pxi" # Read-only implementation of Element proxies
 include "classlookup.pxi"  # Element class lookup mechanisms
 include "nsclasses.pxi"    # Namespace implementation and registry
 include "docloader.pxi"    # Support for custom document loaders
-include "parser.pxi"       # XML Parser
+include "parser.pxi"       # XML and HTML parsers
 include "saxparser.pxi"    # SAX-like Parser interface and tree builder
 include "parsertarget.pxi" # ET Parser target
 include "serializer.pxi"   # XML output functions

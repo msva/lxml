@@ -13,7 +13,8 @@ if this_dir not in sys.path:
 
 from common_imports import etree, ElementTree, fileInTestDir, _str, _bytes
 from common_imports import SillyFileLike, LargeFileLike, HelperTestCase
-from common_imports import read_file, write_to_file
+from common_imports import read_file, write_to_file, BytesIO
+
 
 class _IOTestCaseBase(HelperTestCase):
     """(c)ElementTree compatibility for IO functions/methods
@@ -256,13 +257,13 @@ class _IOTestCaseBase(HelperTestCase):
         dirnameEN = _str('Directory')
         dirnameRU = _str('ÐšÐ°Ñ‚Ð°Ð»Ð¾Ð³')
         filename = _str('nosuchfile.xml')
+        dn = tempfile.mkdtemp(prefix=dirnameEN)
         try:
-            dn = tempfile.mkdtemp(prefix=dirnameEN)
             self.assertRaises(IOError, self.etree.parse, os.path.join(dn, filename))
         finally:
             os.rmdir(dn)
+        dn = tempfile.mkdtemp(prefix=dirnameRU)
         try:
-            dn = tempfile.mkdtemp(prefix=dirnameRU)
             self.assertRaises(IOError, self.etree.parse, os.path.join(dn, filename))
         finally:
             os.rmdir(dn)
@@ -270,10 +271,37 @@ class _IOTestCaseBase(HelperTestCase):
     
 class ETreeIOTestCase(_IOTestCaseBase):
     etree = etree
-    
+
+    def test_write_compressed_text(self):
+        Element = self.etree.Element
+        SubElement = self.etree.SubElement
+        ElementTree = self.etree.ElementTree
+        text = _str("qwrtioüöä")
+
+        root = Element('root')
+        root.text = text
+        child = SubElement(root, 'sub')
+        child.text = 'TEXT'
+        child.tail = 'TAIL'
+        SubElement(root, 'sub').text = text
+
+        tree = ElementTree(root)
+        out = BytesIO()
+        tree.write(out, method='text', encoding='utf8', compression=9)
+        out.seek(0)
+
+        f = gzip.GzipFile(fileobj=out)
+        try:
+            result = f.read().decode('utf8')
+        finally:
+            f.close()
+        self.assertEqual(text+'TEXTTAIL'+text, result)
+
+
 if ElementTree:
     class ElementTreeIOTestCase(_IOTestCaseBase):
         etree = ElementTree
+
 
 def test_suite():
     suite = unittest.TestSuite()
@@ -281,6 +309,7 @@ def test_suite():
     if ElementTree:
         suite.addTests([unittest.makeSuite(ElementTreeIOTestCase)])
     return suite
+
 
 if __name__ == '__main__':
     print('to test use test.py %s' % __file__)

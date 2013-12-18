@@ -2,14 +2,128 @@
 lxml changelog
 ==============
 
-Under development
-=================
+Latest development
+=======================
+
+Features added
+--------------
+
+* ``iterparse()`` supports the ``recover`` option.
+
+Bugs fixed
+----------
+
+Other changes
+-------------
+
+* The safety check in the read-only tree implementation (e.g. used by
+  ``PythonElementClassLookup``) raises a more appropriate ``ReferenceError``
+  for illegal access after tree disposal instead of an ``AssertionError``.
+  This should only impact test code that specifically checks the original
+  behaviour.
+
+
+3.3.0beta1 (2013-12-12)
+=======================
+
+Features added
+--------------
+
+* New option ``handle_failures`` in ``make_links_absolute()`` and
+  ``resolve_base_href()`` (lxml.html) that enables ignoring or
+  discarding links that fail to parse as URLs.
+
+* New parser classes ``XMLPullParser`` and ``HTMLPullParser`` for
+  incremental parsing, as implemented for ElementTree in Python 3.4.
+
+* ``iterparse()`` enables recovery mode by default for HTML parsing
+  (``html=True``).
+
+Bugs fixed
+----------
+
+* LP#1255132: crash when trying to run validation over non-Element (e.g.
+  comment or PI).
+
+* Error messages in the log and in exception messages that originated
+  from libxml2 could accidentally be picked up from preceding warnings
+  instead of the actual error.
+
+* The ``ElementMaker`` in lxml.objectify did not accept a dict as
+  argument for adding attributes to the element it's building. This
+  works as in lxml.builder now.
+
+* LP#1228881: ``repr(XSLTAccessControl)`` failed in Python 3.
+
+* Raise ``ValueError`` when trying to append an Element to itself or
+  to one of its own descendants, instead of running into an infinite
+  loop.
+
+* LP#1206077: htmldiff discarded whitespace from the output.
+
+* Compressed plain-text serialisation to file-like objects was broken.
+
+* lxml.html.formfill: Fix textarea form filling.
+  The textarea used to be cleared before the new content was set,
+  which removed the name attribute.
+
+
+Other changes
+-------------
+
+* Some basic API classes use freelists internally for faster
+  instantiation.  This can speed up some ``iterparse()`` scenarios,
+  for example.
+
+* ``iterparse()`` was rewritten to use the new ``*PullParser``
+  classes internally.
+
+
+3.2.4 (2013-11-07)
+==================
 
 Features added
 --------------
 
 Bugs fixed
 ----------
+
+* Memory leak when creating an XPath evaluator in a thread.
+
+* LP#1228881: ``repr(XSLTAccessControl)`` failed in Python 3.
+
+* Raise ``ValueError`` when trying to append an Element to itself or
+  to one of its own descendants.
+
+* LP#1206077: htmldiff discarded whitespace from the output.
+
+* Compressed plain-text serialisation to file-like objects was broken.
+
+Other changes
+-------------
+
+
+3.2.3 (2013-07-28)
+==================
+
+Bugs fixed
+----------
+
+* Fix support for Python 2.4 which was lost in 3.2.2.
+
+
+3.2.2 (2013-07-28)
+==================
+
+Features added
+--------------
+
+Bugs fixed
+----------
+
+* LP#1185701: spurious XMLSyntaxError after finishing iterparse().
+
+* Crash in lxml.objectify during xsi annotation.
 
 Other changes
 -------------

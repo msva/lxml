@@ -157,7 +157,7 @@ cdef class _ParserDictionaryContext:
 
         # see if we have a current implied parser
         context = self._findThreadParserContext()
-        if python.PyList_GET_SIZE(context._implied_parser_contexts):
+        if context._implied_parser_contexts:
             implied_context = context._implied_parser_contexts[-1]
             return implied_context
         return None
@@ -501,6 +501,8 @@ cdef class _ParserContext(_ResolverContext):
     cdef _ParserSchemaValidationContext _validator
     cdef xmlparser.xmlParserCtxt* _c_ctxt
     cdef python.PyThread_type_lock _lock
+    cdef _Document _doc
+
     def __cinit__(self):
         self._c_ctxt = NULL
         if not config.ENABLE_THREADING:
@@ -546,6 +548,7 @@ cdef class _ParserContext(_ResolverContext):
             if result == 0:
                 raise ParserError, u"parser locking failed"
         self._error_log.clear()
+        self._doc = None
         self._c_ctxt.sax.serror = _receiveParserError
         if self._validator is not None:
             self._validator.connect(self._c_ctxt, self._error_log)
@@ -556,6 +559,7 @@ cdef class _ParserContext(_ResolverContext):
             self._validator.disconnect()
         self._resetParserContext()
         self.clear()
+        self._doc = None
         self._c_ctxt.sax.serror = NULL
         if config.ENABLE_THREADING and self._lock is not NULL:
             python.PyThread_release_lock(self._lock)
@@ -563,19 +567,18 @@ cdef class _ParserContext(_ResolverContext):
 
     cdef object _handleParseResult(self, _BaseParser parser,
                                    xmlDoc* result, filename):
-        cdef xmlDoc* c_doc
-        cdef bint recover
-        recover = parser._parse_options & xmlparser.XML_PARSE_RECOVER
-        c_doc = _handleParseResult(self, self._c_ctxt, result,
-                                   filename, recover)
-        return _documentFactory(c_doc, parser)
+        c_doc = self._handleParseResultDoc(parser, result, filename)
+        if self._doc is not None and self._doc._c_doc is c_doc:
+            return self._doc
+        else:
+            return _documentFactory(c_doc, parser)
 
     cdef xmlDoc* _handleParseResultDoc(self, _BaseParser parser,
                                        xmlDoc* result, filename) except NULL:
-        cdef bint recover
         recover = parser._parse_options & xmlparser.XML_PARSE_RECOVER
         return _handleParseResult(self, self._c_ctxt, result,
-                                   filename, recover)
+                                  filename, recover,
+                                  free_doc=self._doc is None)
 
 cdef _initParserContext(_ParserContext context,
                         _ResolverRegistry resolvers,
@@ -629,7 +632,7 @@ cdef int _raiseParseError(xmlparser.xmlParserCtxt* ctxt, filename,
 cdef xmlDoc* _handleParseResult(_ParserContext context,
                                 xmlparser.xmlParserCtxt* c_ctxt,
                                 xmlDoc* result, filename,
-                                bint recover) except NULL:
+                                bint recover, bint free_doc) except NULL:
     cdef bint well_formed
     if result is not NULL:
         __GLOBAL_PARSER_CONTEXT.initDocDict(result)
@@ -661,13 +664,14 @@ cdef xmlDoc* _handleParseResult(_ParserContext context,
             well_formed = 0
 
         if not well_formed:
-            # free broken document
-            tree.xmlFreeDoc(result)
+            if free_doc:
+                tree.xmlFreeDoc(result)
             result = NULL
 
     if context is not None and context._has_raised():
         if result is not NULL:
-            tree.xmlFreeDoc(result)
+            if free_doc:
+                tree.xmlFreeDoc(result)
             result = NULL
         context._raise_if_stored()
 
@@ -735,20 +739,19 @@ cdef class _BaseParser:
     cdef bint _remove_pis
     cdef bint _strip_cdata
     cdef XMLSchema _schema
-    cdef object _filename
+    cdef bytes _filename
     cdef readonly object target
     cdef object _default_encoding
+    cdef tuple _events_to_collect  # (event_types, tag)
 
     def __init__(self, int parse_options, bint for_html, XMLSchema schema,
-                 remove_comments, remove_pis, strip_cdata, target,
-                 filename, encoding):
+                 remove_comments, remove_pis, strip_cdata, target, encoding):
         cdef tree.xmlCharEncodingHandler* enchandler
         cdef int c_encoding
-        if not isinstance(self, (XMLParser, HTMLParser, iterparse)):
+        if not isinstance(self, (XMLParser, HTMLParser)):
             raise TypeError, u"This class cannot be instantiated"
 
         self._parse_options = parse_options
-        self._filename = filename
         self.target = target
         self._for_html = for_html
         self._remove_comments = remove_comments
@@ -768,10 +771,21 @@ cdef class _BaseParser:
             tree.xmlCharEncCloseFunc(enchandler)
             self._default_encoding = encoding
 
+    cdef _setBaseURL(self, base_url):
+        self._filename = _encodeFilename(base_url)
+
+    cdef _collectEvents(self, event_types, tag):
+        if event_types is None:
+            event_types = ()
+        else:
+            event_types = tuple(set(event_types))
+            _buildParseEventFilter(event_types)  # purely for validation
+        self._events_to_collect = (event_types, tag)
+
     cdef _ParserContext _getParserContext(self):
         cdef xmlparser.xmlParserCtxt* pctxt
         if self._parser_context is None:
-            self._parser_context = self._createContext(self.target)
+            self._parser_context = self._createContext(self.target, None)
             if self._schema is not None:
                 self._parser_context._validator = \
                     self._schema._newSaxValidator(
@@ -792,7 +806,8 @@ cdef class _BaseParser:
     cdef _ParserContext _getPushParserContext(self):
         cdef xmlparser.xmlParserCtxt* pctxt
         if self._push_parser_context is None:
-            self._push_parser_context = self._createContext(self.target)
+            self._push_parser_context = self._createContext(
+                self.target, self._events_to_collect)
             if self._schema is not None:
                 self._push_parser_context._validator = \
                     self._schema._newSaxValidator(
@@ -811,13 +826,20 @@ cdef class _BaseParser:
                 pctxt.sax.cdataBlock = NULL
         return self._push_parser_context
 
-    cdef _ParserContext _createContext(self, target):
-        cdef _TargetParserContext context
-        if target is None:
+    cdef _ParserContext _createContext(self, target, events_to_collect):
+        cdef _SaxParserContext sax_context
+        if target is not None:
+            sax_context = _TargetParserContext()
+            (<_TargetParserContext>sax_context)._setTarget(target)
+        elif events_to_collect:
+            sax_context = _SaxParserContext()
+        else:
+            # nothing special to configure
             return _ParserContext()
-        context = _TargetParserContext()
-        context._setTarget(target)
-        return context
+        if events_to_collect:
+            events, tag = events_to_collect
+            sax_context._setEventFilter(events, tag)
+        return sax_context
 
     cdef int _registerHtmlErrorHandler(self, xmlparser.xmlParserCtxt* c_ctxt) except -1:
         cdef xmlparser.xmlSAXHandler* sax = c_ctxt.sax
@@ -908,6 +930,7 @@ cdef class _BaseParser:
         parser._class_lookup  = self._class_lookup
         parser._default_encoding = self._default_encoding
         parser._schema = self._schema
+        parser._events_to_collect = self._events_to_collect
         return parser
 
     def copy(self):
@@ -1085,11 +1108,9 @@ cdef class _FeedParser(_BaseParser):
         different from what the ``error_log`` property returns.
         """
         def __get__(self):
-            cdef _ParserContext context
-            context = self._getPushParserContext()
-            return context._error_log.copy()
+            return self._getPushParserContext()._error_log.copy()
 
-    def feed(self, data):
+    cpdef feed(self, data):
         u"""feed(self, data)
 
         Feeds data to the parser.  The argument should be an 8-bit string
@@ -1139,13 +1160,16 @@ cdef class _FeedParser(_BaseParser):
             context.prepare()
             self._feed_parser_running = 1
             __GLOBAL_PARSER_CONTEXT.initParserDict(pctxt)
+            c_filename = (_cstr(self._filename)
+                          if self._filename is not None else NULL)
             if self._for_html:
                 error = _htmlCtxtResetPush(
-                    pctxt, NULL, 0, c_encoding, self._parse_options)
+                    pctxt, NULL, 0, c_filename, c_encoding,
+                    self._parse_options)
             else:
                 xmlparser.xmlCtxtUseOptions(pctxt, self._parse_options)
                 error = xmlparser.xmlCtxtResetPush(
-                    pctxt, NULL, 0, NULL, c_encoding)
+                    pctxt, NULL, 0, c_filename, c_encoding)
 
         #print pctxt.charset, 'NONE' if c_encoding is NULL else c_encoding
 
@@ -1174,11 +1198,11 @@ cdef class _FeedParser(_BaseParser):
         if not recover and (error or not pctxt.wellFormed):
             self._feed_parser_running = 0
             try:
-                context._handleParseResult(self, NULL, None)
+                context._handleParseResult(self, pctxt.myDoc, None)
             finally:
                 context.cleanup()
 
-    def close(self):
+    cpdef close(self):
         u"""close(self)
 
         Terminates feeding data to this parser.  This tells the parser to
@@ -1189,10 +1213,6 @@ cdef class _FeedParser(_BaseParser):
         the ``feed()`` method.  It should only be called when using the feed
         parser interface, all other usage is undefined.
         """
-        cdef _ParserContext context
-        cdef xmlparser.xmlParserCtxt* pctxt
-        cdef xmlDoc* c_doc
-        cdef _Document doc
         if not self._feed_parser_running:
             raise XMLSyntaxError(u"no element found",
                                  xmlerror.XML_ERR_INTERNAL_ERROR, 0, 0)
@@ -1205,6 +1225,12 @@ cdef class _FeedParser(_BaseParser):
             htmlparser.htmlParseChunk(pctxt, NULL, 0, 1)
         else:
             xmlparser.xmlParseChunk(pctxt, NULL, 0, 1)
+
+        if (pctxt.recovery and not pctxt.disableSAX and
+                isinstance(context, _SaxParserContext)):
+            # apply any left-over 'end' events
+            (<_SaxParserContext>context).flushEvents()
+
         try:
             result = context._handleParseResult(self, pctxt.myDoc, None)
         finally:
@@ -1217,7 +1243,8 @@ cdef class _FeedParser(_BaseParser):
 
 cdef int _htmlCtxtResetPush(xmlparser.xmlParserCtxt* c_ctxt,
                              const_char* c_data, int buffer_len,
-                             const_char* c_encoding, int parse_options) except -1:
+                             const_char* c_filename, const_char* c_encoding,
+                             int parse_options) except -1:
     cdef xmlparser.xmlParserInput* c_input_stream
     # libxml2 crashes if spaceTab is not initialised
     if _LIBXML_VERSION_INT < 20629 and c_ctxt.spaceTab is NULL:
@@ -1225,7 +1252,8 @@ cdef int _htmlCtxtResetPush(xmlparser.xmlParserCtxt* c_ctxt,
         c_ctxt.spaceMax = 10
 
     # libxml2 lacks an HTML push parser setup function
-    error = xmlparser.xmlCtxtResetPush(c_ctxt, NULL, 0, NULL, c_encoding)
+    error = xmlparser.xmlCtxtResetPush(
+        c_ctxt, NULL, 0, c_filename, c_encoding)
     if error:
         return error
 
@@ -1330,7 +1358,37 @@ cdef class XMLParser(_FeedParser):
 
         _BaseParser.__init__(self, parse_options, 0, schema,
                              remove_comments, remove_pis, strip_cdata,
-                             target, None, encoding)
+                             target, encoding)
+
+
+cdef class XMLPullParser(XMLParser):
+    """XMLPullParser(self, events=None, *, tag=None, **kwargs)
+
+    XML parser that collects parse events in an iterator.
+
+    The collected events are the same as for iterparse(), but the
+    parser itself is non-blocking in the sense that it receives
+    data chunks incrementally through its .feed() method, instead
+    of reading them directly from a file(-like) object all by itself.
+
+    By default, it collects Element end events.  To change that,
+    pass any subset of the available events into the ``events``
+    argument: ``'start'``, ``'end'``, ``'start-ns'``,
+    ``'end-ns'``, ``'comment'``, ``'pi'``.
+
+    To support loading external dependencies relative to the input
+    source, you can pass the ``base_url``.
+    """
+    def __init__(self, events=None, *, tag=None, base_url=None, **kwargs):
+        XMLParser.__init__(self, **kwargs)
+        if events is None:
+            events = ('end',)
+        self._setBaseURL(base_url)
+        self._collectEvents(events, tag)
+
+    def read_events(self):
+        return (<_SaxParserContext?>self._getPushParserContext()).events_iterator
+
 
 cdef class ETCompatXMLParser(XMLParser):
     u"""ETCompatXMLParser(self, encoding=None, attribute_defaults=False, \
@@ -1460,10 +1518,41 @@ cdef class HTMLParser(_FeedParser):
 
         _BaseParser.__init__(self, parse_options, 1, schema,
                              remove_comments, remove_pis, strip_cdata,
-                             target, None, encoding)
+                             target, encoding)
+
 
 cdef HTMLParser __DEFAULT_HTML_PARSER
 __DEFAULT_HTML_PARSER = HTMLParser()
+
+
+cdef class HTMLPullParser(HTMLParser):
+    """HTMLPullParser(self, events=None, *, tag=None, base_url=None, **kwargs)
+
+    HTML parser that collects parse events in an iterator.
+
+    The collected events are the same as for iterparse(), but the
+    parser itself is non-blocking in the sense that it receives
+    data chunks incrementally through its .feed() method, instead
+    of reading them directly from a file(-like) object all by itself.
+
+    By default, it collects Element end events.  To change that,
+    pass any subset of the available events into the ``events``
+    argument: ``'start'``, ``'end'``, ``'start-ns'``,
+    ``'end-ns'``, ``'comment'``, ``'pi'``.
+
+    To support loading external dependencies relative to the input
+    source, you can pass the ``base_url``.
+    """
+    def __init__(self, events=None, *, tag=None, base_url=None, **kwargs):
+        HTMLParser.__init__(self, **kwargs)
+        if events is None:
+            events = ('end',)
+        self._setBaseURL(base_url)
+        self._collectEvents(events, tag)
+
+    def read_events(self):
+        return (<_SaxParserContext?>self._getPushParserContext()).events_iterator
+
 
 ############################################################
 ## helper functions for document creation

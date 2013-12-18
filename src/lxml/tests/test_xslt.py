@@ -762,25 +762,34 @@ class ETreeXSLTTestCase(HelperTestCase):
     def test_xslt_document_parse_allow(self):
         access_control = etree.XSLTAccessControl(read_file=True)
         xslt = etree.XSLT(etree.parse(fileInTestDir("test-document.xslt")),
-                          access_control = access_control)
+                          access_control=access_control)
         result = xslt(etree.XML('<a/>'))
         root = result.getroot()
         self.assertEqual(root.tag,
-                          'test')
+                         'test')
         self.assertEqual(root[0].tag,
-                          '{http://www.w3.org/1999/XSL/Transform}stylesheet')
+                         '{http://www.w3.org/1999/XSL/Transform}stylesheet')
 
     def test_xslt_document_parse_deny(self):
         access_control = etree.XSLTAccessControl(read_file=False)
         xslt = etree.XSLT(etree.parse(fileInTestDir("test-document.xslt")),
-                          access_control = access_control)
+                          access_control=access_control)
         self.assertRaises(etree.XSLTApplyError, xslt, etree.XML('<a/>'))
 
     def test_xslt_document_parse_deny_all(self):
         access_control = etree.XSLTAccessControl.DENY_ALL
         xslt = etree.XSLT(etree.parse(fileInTestDir("test-document.xslt")),
-                          access_control = access_control)
+                          access_control=access_control)
         self.assertRaises(etree.XSLTApplyError, xslt, etree.XML('<a/>'))
+
+    def test_xslt_access_control_repr(self):
+        access_control = etree.XSLTAccessControl.DENY_ALL
+        self.assertTrue(repr(access_control).startswith(type(access_control).__name__))
+        self.assertEqual(repr(access_control), repr(access_control))
+        self.assertNotEqual(repr(etree.XSLTAccessControl.DENY_ALL),
+                            repr(etree.XSLTAccessControl.DENY_WRITE))
+        self.assertNotEqual(repr(etree.XSLTAccessControl.DENY_ALL),
+                            repr(etree.XSLTAccessControl()))
 
     def test_xslt_move_result(self):
         root = etree.XML(_bytes('''\

@@ -15,6 +15,7 @@ import re
 import gc
 import operator
 import tempfile
+import zlib
 import gzip
 
 this_dir = os.path.dirname(__file__)
@@ -393,14 +394,15 @@ class ETreeOnlyTestCase(HelperTestCase):
         XML = self.etree.XML
         xml = _bytes('''
         <div>
-	    <div>
-		I like <strong>sheep</strong>.
-		<br/>
-		I like lots of <strong>sheep</strong>.
-		<br/>
-		Click <a href="http://www.sheep.com">here</a> for <a href="http://www.sheep.com">those</a> sheep.
-		<br/>
-	    </div>
+            <div>
+                I like <strong>sheep</strong>.
+                <br/>
+                I like lots of <strong>sheep</strong>.
+                <br/>
+                Click <a href="http://www.sheep.com">here</a>
+                 for <a href="http://www.sheep.com">those</a> sheep.
+                <br/>
+            </div>
         </div>
         '''.strip())
 
@@ -651,6 +653,40 @@ class ETreeOnlyTestCase(HelperTestCase):
         f = BytesIO('<a><b><c/></a>')
         # ET raises ExpatError, lxml raises XMLSyntaxError
         self.assertRaises(self.etree.XMLSyntaxError, list, iterparse(f))
+
+    def test_iterparse_broken_recover(self):
+        iterparse = self.etree.iterparse
+        f = BytesIO('<a><b><c/></a>')
+        it = iterparse(f, events=('start', 'end'), recover=True)
+        events = [(ev, el.tag) for ev, el in it]
+        root = it.root
+        self.assertTrue(root is not None)
+
+        self.assertEqual(1, events.count(('start', 'a')))
+        self.assertEqual(1, events.count(('end', 'a')))
+
+        self.assertEqual(1, events.count(('start', 'b')))
+        self.assertEqual(1, events.count(('end', 'b')))
+
+        self.assertEqual(1, events.count(('start', 'c')))
+        self.assertEqual(1, events.count(('end', 'c')))
+
+    def test_iterparse_broken_multi_recover(self):
+        iterparse = self.etree.iterparse
+        f = BytesIO('<a><b><c/></d><b><c/></a></b>')
+        it = iterparse(f, events=('start', 'end'), recover=True)
+        events = [(ev, el.tag) for ev, el in it]
+        root = it.root
+        self.assertTrue(root is not None)
+
+        self.assertEqual(1, events.count(('start', 'a')))
+        self.assertEqual(1, events.count(('end', 'a')))
+
+        self.assertEqual(2, events.count(('start', 'b')))
+        self.assertEqual(2, events.count(('end', 'b')))
+
+        self.assertEqual(2, events.count(('start', 'c')))
+        self.assertEqual(2, events.count(('end', 'c')))
 
     def test_iterparse_strip(self):
         iterparse = self.etree.iterparse
@@ -1381,6 +1417,18 @@ class ETreeOnlyTestCase(HelperTestCase):
         self.assertRaises(TypeError, root.extend, [Element('one'), None])
         self.assertEqual('one', root[0].tag)
 
+    def test_append_recursive_error(self):
+        Element = self.etree.Element
+        SubElement = self.etree.SubElement
+        root = Element('root')
+        self.assertRaises(ValueError, root.append, root)
+        child = SubElement(root, 'child')
+        self.assertRaises(ValueError, child.append, root)
+        child2 = SubElement(child, 'child2')
+        self.assertRaises(ValueError, child2.append, root)
+        self.assertRaises(ValueError, child2.append, child)
+        self.assertEqual('child2', root[0][0].tag)
+
     def test_addnext(self):
         Element = self.etree.Element
         SubElement = self.etree.SubElement
@@ -1407,11 +1455,37 @@ class ETreeOnlyTestCase(HelperTestCase):
         self.assertEqual(['b', 'a'],
                           [c.tag for c in root])
 
-    def test_addnext_root(self):
+    def test_addprevious_noops(self):
         Element = self.etree.Element
-        a = Element('a')
-        b = Element('b')
-        self.assertRaises(TypeError, a.addnext, b)
+        SubElement = self.etree.SubElement
+        root = Element('root')
+        a = SubElement(root, 'a')
+        b = SubElement(root, 'b')
+        a.addprevious(a)
+        self.assertEqual('a', root[0].tag)
+        self.assertEqual('b', root[1].tag)
+        b.addprevious(b)
+        self.assertEqual('a', root[0].tag)
+        self.assertEqual('b', root[1].tag)
+        b.addprevious(a)
+        self.assertEqual('a', root[0].tag)
+        self.assertEqual('b', root[1].tag)
+
+    def test_addnext_noops(self):
+        Element = self.etree.Element
+        SubElement = self.etree.SubElement
+        root = Element('root')
+        a = SubElement(root, 'a')
+        b = SubElement(root, 'b')
+        a.addnext(a)
+        self.assertEqual('a', root[0].tag)
+        self.assertEqual('b', root[1].tag)
+        b.addnext(b)
+        self.assertEqual('a', root[0].tag)
+        self.assertEqual('b', root[1].tag)
+        a.addnext(b)
+        self.assertEqual('a', root[0].tag)
+        self.assertEqual('b', root[1].tag)
 
     def test_addnext_root(self):
         Element = self.etree.Element
@@ -1668,6 +1742,15 @@ class ETreeOnlyTestCase(HelperTestCase):
             result.append(el.text)
         self.assertEqual(['Two', 'Bla'], result)
 
+    def test_iterchildren_tag_posarg(self):
+        XML = self.etree.XML
+
+        root = XML(_bytes('<doc><one/><two>Two</two>Hm<two>Bla</two></doc>'))
+        result = []
+        for el in root.iterchildren('two'):
+            result.append(el.text)
+        self.assertEqual(['Two', 'Bla'], result)
+
     def test_iterchildren_tag_reversed(self):
         XML = self.etree.XML
         
@@ -1683,6 +1766,15 @@ class ETreeOnlyTestCase(HelperTestCase):
         root = XML(_bytes('<doc><one/><two>Two</two>Hm<two>Bla</two><three/></doc>'))
         result = []
         for el in root.iterchildren(tag=['two', 'three']):
+            result.append(el.text)
+        self.assertEqual(['Two', 'Bla', None], result)
+
+    def test_iterchildren_tag_multiple_posarg(self):
+        XML = self.etree.XML
+
+        root = XML(_bytes('<doc><one/><two>Two</two>Hm<two>Bla</two><three/></doc>'))
+        result = []
+        for el in root.iterchildren('two', 'three'):
             result.append(el.text)
         self.assertEqual(['Two', 'Bla', None], result)
 
@@ -1726,10 +1818,17 @@ class ETreeOnlyTestCase(HelperTestCase):
         d = SubElement(b, 'd')
         self.assertEqual(
             [a],
+            list(d.iterancestors('a')))
+        self.assertEqual(
+            [a],
             list(d.iterancestors(tag='a')))
+
         self.assertEqual(
             [b, a],
-               list(d.iterancestors(tag='*')))
+            list(d.iterancestors('*')))
+        self.assertEqual(
+            [b, a],
+            list(d.iterancestors(tag='*')))
 
     def test_iterancestors_tag_multiple(self):
         Element    = self.etree.Element
@@ -1741,19 +1840,38 @@ class ETreeOnlyTestCase(HelperTestCase):
         d = SubElement(b, 'd')
         self.assertEqual(
             [b, a],
-               list(d.iterancestors(tag=('a', 'b'))))
-        self.assertEqual(
-            [],
-               list(d.iterancestors(tag=('w', 'x', 'y', 'z'))))
-        self.assertEqual(
-            [],
-              list(d.iterancestors(tag=('d', 'x'))))
+            list(d.iterancestors(tag=('a', 'b'))))
         self.assertEqual(
             [b, a],
-              list(d.iterancestors(tag=('b', '*'))))
+            list(d.iterancestors('a', 'b')))
+
+        self.assertEqual(
+            [],
+            list(d.iterancestors(tag=('w', 'x', 'y', 'z'))))
+        self.assertEqual(
+            [],
+            list(d.iterancestors('w', 'x', 'y', 'z')))
+
+        self.assertEqual(
+            [],
+            list(d.iterancestors(tag=('d', 'x'))))
+        self.assertEqual(
+            [],
+            list(d.iterancestors('d', 'x')))
+
+        self.assertEqual(
+            [b, a],
+            list(d.iterancestors(tag=('b', '*'))))
+        self.assertEqual(
+            [b, a],
+            list(d.iterancestors('b', '*')))
+
         self.assertEqual(
             [b],
-              list(d.iterancestors(tag=('b', 'c'))))
+            list(d.iterancestors(tag=('b', 'c'))))
+        self.assertEqual(
+            [b],
+            list(d.iterancestors('b', 'c')))
 
     def test_iterdescendants(self):
         Element = self.etree.Element
@@ -1785,13 +1903,21 @@ class ETreeOnlyTestCase(HelperTestCase):
         self.assertEqual(
             [],
             list(a.iterdescendants('a')))
+        self.assertEqual(
+            [],
+            list(a.iterdescendants(tag='a')))
+
         a2 = SubElement(e, 'a')
         self.assertEqual(
             [a2],
             list(a.iterdescendants('a')))
+
         self.assertEqual(
             [a2],
             list(c.iterdescendants('a')))
+        self.assertEqual(
+            [a2],
+            list(c.iterdescendants(tag='a')))
 
     def test_iterdescendants_tag_multiple(self):
         Element = self.etree.Element
@@ -1806,16 +1932,31 @@ class ETreeOnlyTestCase(HelperTestCase):
         self.assertEqual(
             [b, e],
             list(a.iterdescendants(tag=('a', 'b', 'e'))))
+        self.assertEqual(
+            [b, e],
+            list(a.iterdescendants('a', 'b', 'e')))
+
         a2 = SubElement(e, 'a')
         self.assertEqual(
             [b, a2],
             list(a.iterdescendants(tag=('a', 'b'))))
         self.assertEqual(
+            [b, a2],
+            list(a.iterdescendants('a', 'b')))
+
+        self.assertEqual(
             [],
             list(c.iterdescendants(tag=('x', 'y', 'z'))))
         self.assertEqual(
+            [],
+            list(c.iterdescendants('x', 'y', 'z')))
+
+        self.assertEqual(
             [b, d, c, e, a2],
-              list(a.iterdescendants(tag=('x', 'y', 'z', '*'))))
+            list(a.iterdescendants(tag=('x', 'y', 'z', '*'))))
+        self.assertEqual(
+            [b, d, c, e, a2],
+            list(a.iterdescendants('x', 'y', 'z', '*')))
 
     def test_getroottree(self):
         Element = self.etree.Element
@@ -3300,6 +3441,21 @@ class ETreeOnlyTestCase(HelperTestCase):
         self.assertEqual(len(root), 1)
         self.assertEqual(root[0].tag, 'child')
 
+    def test_element_refcycle(self):
+        class SubEl(etree.ElementBase):
+            pass
+
+        el1 = SubEl()
+        el2 = SubEl()
+        self.assertEqual('SubEl', el1.tag)
+        self.assertEqual('SubEl', el2.tag)
+        el1.other = el2
+        el2.other = el1
+
+        del el1, el2
+        gc.collect()
+        # not really testing anything here, but it shouldn't crash
+
     # helper methods
 
     def _writeElement(self, element, encoding='us-ascii', compression=0):
@@ -3716,6 +3872,122 @@ class ETreeErrorLogTest(HelperTestCase):
         self.assertTrue([ message for message in messages
                        if ':1:15:' in message ])
 
+
+class XMLPullParserTest(unittest.TestCase):
+    etree = etree
+
+    def assert_event_tags(self, events, expected):
+        self.assertEqual([(action, elem.tag) for action, elem in events],
+                         expected)
+
+    def test_pull_from_simple_target(self):
+        class Target(object):
+            def start(self, tag, attrib):
+                return 'start(%s)' % tag
+            def end(self, tag):
+                return 'end(%s)' % tag
+            def close(self):
+                return 'close()'
+
+        parser = self.etree.XMLPullParser(target=Target())
+        events = parser.read_events()
+
+        parser.feed('<root><element>')
+        self.assertFalse(list(events))
+        self.assertFalse(list(events))
+        parser.feed('</element><child>')
+        self.assertEqual([('end', 'end(element)')], list(events))
+        parser.feed('</child>')
+        self.assertEqual([('end', 'end(child)')], list(events))
+        parser.feed('</root>')
+        self.assertEqual([('end', 'end(root)')], list(events))
+        self.assertFalse(list(events))
+        self.assertEqual('close()', parser.close())
+
+    def test_pull_from_simple_target_start_end(self):
+        class Target(object):
+            def start(self, tag, attrib):
+                return 'start(%s)' % tag
+            def end(self, tag):
+                return 'end(%s)' % tag
+            def close(self):
+                return 'close()'
+
+        parser = self.etree.XMLPullParser(
+            ['start', 'end'], target=Target())
+        events = parser.read_events()
+
+        parser.feed('<root><element>')
+        self.assertEqual(
+            [('start', 'start(root)'), ('start', 'start(element)')],
+            list(events))
+        self.assertFalse(list(events))
+        parser.feed('</element><child>')
+        self.assertEqual(
+            [('end', 'end(element)'), ('start', 'start(child)')],
+            list(events))
+        parser.feed('</child>')
+        self.assertEqual(
+            [('end', 'end(child)')],
+            list(events))
+        parser.feed('</root>')
+        self.assertEqual(
+            [('end', 'end(root)')],
+            list(events))
+        self.assertFalse(list(events))
+        self.assertEqual('close()', parser.close())
+
+    def test_pull_from_tree_builder(self):
+        parser = self.etree.XMLPullParser(
+            ['start', 'end'], target=etree.TreeBuilder())
+        events = parser.read_events()
+
+        parser.feed('<root><element>')
+        self.assert_event_tags(
+            events, [('start', 'root'), ('start', 'element')])
+        self.assertFalse(list(events))
+        parser.feed('</element><child>')
+        self.assert_event_tags(
+            events, [('end', 'element'), ('start', 'child')])
+        parser.feed('</child>')
+        self.assert_event_tags(
+            events, [('end', 'child')])
+        parser.feed('</root>')
+        self.assert_event_tags(
+            events, [('end', 'root')])
+        self.assertFalse(list(events))
+        root = parser.close()
+        self.assertEqual('root', root.tag)
+
+    def test_pull_from_tree_builder_subclass(self):
+        class Target(etree.TreeBuilder):
+            def end(self, tag):
+                el = super(Target, self).end(tag)
+                el.tag += '-huhu'
+                return el
+
+        parser = self.etree.XMLPullParser(
+            ['start', 'end'], target=Target())
+        events = parser.read_events()
+
+        parser.feed('<root><element>')
+        self.assert_event_tags(
+            events, [('start', 'root'), ('start', 'element')])
+        self.assertFalse(list(events))
+        parser.feed('</element><child>')
+        self.assert_event_tags(
+            events, [('end', 'element-huhu'), ('start', 'child')])
+        parser.feed('</child>')
+        self.assert_event_tags(
+            events, [('end', 'child-huhu')])
+        parser.feed('</root>')
+        self.assert_event_tags(
+            events, [('end', 'root-huhu')])
+        self.assertFalse(list(events))
+        root = parser.close()
+        self.assertEqual('root-huhu', root.tag)
+
+
 def test_suite():
     suite = unittest.TestSuite()
     suite.addTests([unittest.makeSuite(ETreeOnlyTestCase)])
@@ -3724,6 +3996,7 @@ def test_suite():
     suite.addTests([unittest.makeSuite(ETreeC14NTestCase)])
     suite.addTests([unittest.makeSuite(ETreeWriteTestCase)])
     suite.addTests([unittest.makeSuite(ETreeErrorLogTest)])
+    suite.addTests([unittest.makeSuite(XMLPullParserTest)])
     suite.addTests(
         [make_doctest('../../../doc/tutorial.txt')])
     if sys.version_info >= (2,6):

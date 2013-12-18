@@ -42,9 +42,9 @@ developer sources (e.g. to test a bug fix that has not been release
 yet) or if you want to be an lxml developer, then you do need a
 working Cython installation.  You can use pip_ to install it::
 
-    pip install "Cython>=0.18"
+    pip install "Cython>=0.19.2"
 
-lxml currently requires at least Cython 0.18, later release versions
+lxml currently requires at least Cython 0.19, later release versions
 should work as well.
 
 
@@ -95,6 +95,13 @@ or, in Unix-like environments::
 
   make inplace
 
+To speed up the build in test environments (e.g. on a continuous
+integration server), set the ``CFLAGS`` environment variable to
+disable C compiler optimisations (e.g. "-O0" for gcc, that's
+minus-oh-zero), for example::
+
+  CFLAGS="-O0"  make inplace
+
 If you get errors about missing header files (e.g. ``Python.h`` or
 ``libxml/xmlversion.h``) then you need to make sure the development
 packages of Python, libxml2 and libxslt are properly installed.  On
@@ -124,9 +131,7 @@ on your Python module search path (PYTHONPATH) and then import
   >>>
 
 To make sure everything gets recompiled cleanly after changes, you can
-run ``make clean`` or delete the file ``src/lxml/etree.c``.  Distutils
-do not automatically pick up changes that affect files other than the
-main file ``src/lxml/etree.pyx``.
+run ``make clean`` or delete the file ``src/lxml/etree.c``.
 
 
 Running the tests and reporting errors
