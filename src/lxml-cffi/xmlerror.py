@@ -4,7 +4,7 @@ import cffi
 
 from .etree import __MAX_LOG_SIZE
 from .apihelpers import _decodeFilename, _isFilePath
-from .includes import xmlerror
+from .includes import xmlerror, tree
 from . import python
 
 # module level API functions
@@ -157,28 +157,32 @@ class _LogEntry(object):
     - filename: the name of the file in which the message originated (if applicable)
     """
 
+    def __del__(self):
+        tree.xmlFree(self._c_message)
+        tree.xmlFree(self._c_filename)
+
     def _setError(self, error):
         self.domain   = error.domain
         self.type     = error.code
         self.level    = error.level
         self.line     = error.line
         self.column   = error.int2
-        if not error.message:
-            self.message = "unknown error"
+        self._c_message = tree.ffi.NULL
+        self._c_filename = tree.ffi.NULL
+        if not error.message or error.message[0] in b'\n\0':
+            self._message = u"unknown error"
         else:
-            message = xmlerror.ffi.string(error.message)
-            message = message.rstrip('\n')
-            try:
-                self.message = message.decode('utf8')
-            except:
-                try:
-                    self.message = message.decode('ascii', 'backslashreplace')
-                except:
-                    self.message = '<undecodable error message>'
+            self._message = None
+            self._c_message = tree.xmlStrdup(error.message)
+            if not self._c_message:
+                raise MemoryError
         if not error.file:
-            self.filename = u'<string>'
+            self._filename = u'<string>'
         else:
-            self.filename = _decodeFilename(xmlerror.ffi.string(error.file))
+            self._filename = None
+            self._c_filename = tree.xmlStrdup(error.file)
+            if not self._c_filename:
+                raise MemoryError
 
     def _setGeneric(self, domain, type, level, line, message, filename):
         self.domain  = domain
@@ -186,8 +190,8 @@ class _LogEntry(object):
         self.level   = level
         self.line    = line
         self.column  = 0
-        self.message = message
-        self.filename = filename
+        self._message = message
+        self._filename = filename
 
     def __repr__(self):
         return u"%s:%d:%d:%s:%s:%s: %s" % (
@@ -215,6 +219,41 @@ class _LogEntry(object):
         """The name of the error level.  See lxml.etree.ErrorLevels
         """
         return ErrorLevels._getName(self.level, u"unknown")
+
+    @property
+    def message(self):
+        if self._message is not None:
+            return self._message
+        if not self._c_message:
+            return None
+        message = tree.ffi.string(self._c_message)
+        message = message.rstrip('\n')
+        # cannot use funicode() here because the message may contain
+        # byte encoded file paths etc.
+        try:
+            self._message = message.decode('utf8')
+        except UnicodeDecodeError:
+            try:
+                self._message = message.decode(
+                    'ascii', 'backslashreplace')
+            except UnicodeDecodeError:
+                self._message = u'<undecodable error message>'
+        if self._c_message:
+            # clean up early
+            tree.xmlFree(self._c_message)
+            self._c_message = tree.ffi.NULL
+        return self._message
+
+    @property
+    def filename(self):
+        if self._filename is None:
+            if self._c_filename:
+                self._filename = _decodeFilename(self._c_filename)
+                # clean up early
+                tree.xmlFree(self._c_filename)
+                self._c_filename = tree.ffi.NULL
+        return self._filename        
+
 
 class _BaseErrorLog:
     _handle = None
@@ -295,6 +334,9 @@ class _BaseErrorLog:
 
 class _ListErrorLog(_BaseErrorLog):
     u"Immutable base version of a list based error log."
+
+    _offset = 0
+
     def __init__(self, entries, first_error, last_error):
         if entries:
             if first_error is None:
@@ -308,31 +350,36 @@ class _ListErrorLog(_BaseErrorLog):
         u"""Creates a shallow copy of this error log.  Reuses the list of
         entries.
         """
-        return _ListErrorLog(self._entries, self._first_error, self.last_error)
+        log = _ListErrorLog(
+            self._entries, self._first_error, self.last_error)
+        log._offset = self._offset
+        return log
 
     def __iter__(self):
-        return iter(self._entries)
+        entries = self._entries
+        if self._offset:
+            entries = islice(entries, self._offset)
+        return iter(entries)
 
     def __repr__(self):
-        l = []
-        for entry in self._entries:
-            l.append(repr(entry))
-        return u'\n'.join(l)
+        return u'\n'.join(repr(entry) for entry in self)
 
     def __getitem__(self, index):
-        return self._entries[index]
+        return self._entries[self._offset + index]
 
     def __len__(self):
-        return len(self._entries)
+        return len(self._entries) - self._offset
 
     def __contains__(self, error_type):
-        for entry in self._entries:
+        for i, entry in enumerate(self._entries):
+            if i < self._offset:
+                continue
             if entry.type == error_type:
                 return True
         return False
 
     def __nonzero__(self):
-        return bool(self._entries)
+        return len(self._entries) > self._offset
 
     def filter_types(self, types):
         u"""filter_types(self, types)
@@ -340,12 +387,9 @@ class _ListErrorLog(_BaseErrorLog):
         Filter the errors by the given types and return a new error
         log containing the matches.
         """
-        filtered = []
-        if not python.PySequence_Check(types):
+        if isinstance(types, (int, long)):
             types = (types,)
-        for entry in self._entries:
-            if entry.type in types:
-                filtered.append(entry)
+        filtered = [entry for entry in self if entry.type in types]
         return _ListErrorLog(filtered, None, None)
 
     def filter_from_level(self, level):
@@ -353,10 +397,7 @@ class _ListErrorLog(_BaseErrorLog):
 
         Return a log with all messages of the requested level of worse.
         """
-        filtered = []
-        for entry in self._entries:
-            if entry.level >= level:
-                filtered.append(entry)
+        filtered = [entry for entry in self if entry.level >= level]
         return _ListErrorLog(filtered, None, None)
 
     def filter_from_fatals(self):
@@ -416,19 +457,22 @@ class _ErrorLog(_ListErrorLog):
 
     def clear(self):
         self._first_error = None
+        self.last_error = None
+        self._offset = 0
         del self._entries[:]
 
     def copy(self):
         u"""Creates a shallow copy of this error log and the list of entries.
         """
-        return _ListErrorLog(self._entries[:], self._first_error,
-                             self.last_error)
+        return _ListErrorLog(
+            self._entries[self._offset:],
+            self._first_error, self.last_error)
 
     def __iter__(self):
-        return iter(self._entries[:])
+        return iter(self._entries[self._offset:])
 
     def receive(self, entry):
-        if self._first_error is None:
+        if self._first_error is None and entry.level >= xmlerror.XML_ERR_ERROR:
             self._first_error = entry
         self._entries.append(entry)
 
@@ -438,9 +482,17 @@ class _RotatingErrorLog(_ErrorLog):
         self._max_len = max_len
 
     def receive(self, entry):
-        if len(self._entries) > self._max_len:
-            del self._entries[0]
+        if self._first_error is None and entry.level >= xmlerror.XML_ERR_ERROR:
+            self._first_error = entry
         self._entries.append(entry)
+
+        if len(self._entries) > self._max_len:
+            self._offset += 1
+            if self._offset > self._max_len // 3:
+                offset = self._offset
+                self._offset = 0
+                del self._entries[:offset]
+
 
 # thread-local, global list log to collect error output messages from
 # libxml2/libxslt

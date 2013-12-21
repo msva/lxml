@@ -24,17 +24,9 @@ def PyBytes_FromFormat(fmt, *args):
 
 def PySequence_Check(obj):
     return isinstance(obj, (list, tuple))
-def PyList_Check(obj):
-    return isinstance(obj, list)
-def PyDict_Check(obj):
-    return isinstance(obj, dict)
 def PyDict_GetItem(obj, item):
     return obj[item]
 
-def PySlice_Check(obj):
-    return isinstance(obj, slice)
-def PyBool_Check(obj):
-    return isinstance(obj, bool)
 def PyNumber_Check(obj):
     return isinstance(obj, (int, long, float))
 def PyType_Check(obj):

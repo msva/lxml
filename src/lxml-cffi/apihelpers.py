@@ -63,7 +63,8 @@ def _rootNodeOrRaise(input):
     else:
         raise TypeError, u"Invalid input object: %s" % \
             python._fqtypename(input)
-    if node is None:
+    if (node is None or not node._c_node or
+        node._c_node.type != tree.XML_ELEMENT_NODE):
         raise ValueError, u"Input object has no element: %s" % \
             python._fqtypename(input)
     _assertValidNode(node)
@@ -250,7 +251,7 @@ def _initNodeAttributes(c_node, doc, attrib, extra):
     if attrib is not None and not hasattr(attrib, u'items'):
         raise TypeError, u"Invalid attribute dictionary: %s" % \
             python._fqtypename(attrib)
-    if extra is not None and extra:
+    if extra:
         if attrib is None:
             attrib = extra
         else:
@@ -814,11 +815,30 @@ def _tagMatchesExactly(c_node, c_qname):
     * c_name is NULL
     * its name string points to the same address (!) as c_name
     """
-    if c_qname.c_name and c_qname.c_name != c_node.name:
+    return _nsTagMatchesExactly(_getNs(c_node), c_node.name, c_qname)
+
+def _nsTagMatchesExactly(c_node_href, c_node_name, c_qname):
+    u"""Tests if name and namespace URI match those of c_qname.
+
+    This differs from _tagMatches() in that it does not consider a
+    NULL value in qname.href a wildcard, and that it expects the c_name
+    to be taken from the doc dict, i.e. it only compares the names by
+    address.
+
+    A node matches if it matches both href and c_name of the qname.
+
+    A node matches c_href if any of the following is true:
+    * its namespace is NULL and c_href is the empty string
+    * its namespace string equals the c_href string
+
+    A node matches c_name if any of the following is true:
+    * c_name is NULL
+    * its name string points to the same address (!) as c_name
+    """
+    if c_qname.c_name and c_qname.c_name != c_node_name:
         return 0
     if c_qname.href is None:
         return 1
-    c_node_href = _getNs(c_node)
     c_href = c_qname.href
     if c_href == '':
         return not c_node_href or c_node_href[0] == '\0'
@@ -1101,6 +1121,12 @@ def _appendChild(parent, child):
     from .proxy import moveNodeToDocument
     c_node = child._c_node
     c_source_doc = c_node.doc
+    # prevent cycles
+    c_parent = parent._c_node
+    while c_parent:
+        if c_parent == c_node:
+            raise ValueError("cannot append parent to itself")
+        c_parent = c_parent.parent
     # store possible text node
     c_next = c_node.next
     # move node itself
@@ -1117,6 +1143,12 @@ def _prependChild(parent, child):
     from .proxy import moveNodeToDocument
     c_node = child._c_node
     c_source_doc = c_node.doc
+    # prevent cycles
+    c_parent = parent._c_node
+    while c_parent:
+        if c_parent == c_node:
+            raise ValueError("cannot append parent to itself")
+        c_parent = c_parent.parent
     # store possible text node
     c_next = c_node.next
     # move node itself
@@ -1132,10 +1164,12 @@ def _prependChild(parent, child):
     moveNodeToDocument(parent._doc, c_source_doc, c_node)
 
 def _appendSibling(element, sibling):
-    u"""Append a new child to a parent element.
+    u"""Add a new sibling behind an element.
     """
     from .proxy import moveNodeToDocument
     c_node = sibling._c_node
+    if element._c_node == c_node:
+        return 0  # nothing to do
     c_source_doc = c_node.doc
     # store possible text node
     c_next = c_node.next
@@ -1147,10 +1181,12 @@ def _appendSibling(element, sibling):
     moveNodeToDocument(element._doc, c_source_doc, c_node)
 
 def _prependSibling(element, sibling):
-    u"""Append a new child to a parent element.
+    u"""Add a new sibling before an element.
     """
     from .proxy import moveNodeToDocument
     c_node = sibling._c_node
+    if element._c_node == c_node:
+        return 0  # nothing to do
     c_source_doc = c_node.doc
     # store possible text node
     c_next = c_node.next

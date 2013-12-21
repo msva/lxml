@@ -213,6 +213,32 @@ class XSLTAccessControl(object):
     def _register_in_context(self, ctxt):
         xslt.xsltSetCtxtSecurityPrefs(self._prefs, ctxt)
 
+    @property
+    def options(self):
+        u"The access control configuration as a map of options."
+        return {
+            u'read_file': self._optval(xslt.XSLT_SECPREF_READ_FILE),
+            u'write_file': self._optval(xslt.XSLT_SECPREF_WRITE_FILE),
+            u'create_dir': self._optval(xslt.XSLT_SECPREF_CREATE_DIRECTORY),
+            u'read_network': self._optval(xslt.XSLT_SECPREF_READ_NETWORK),
+            u'write_network': self._optval(xslt.XSLT_SECPREF_WRITE_NETWORK),
+            }
+
+    def _optval(self, option):
+        function = xslt.xsltGetSecurityPrefs(self._prefs, option)
+        if function == xslt.xsltSecurityAllow:
+            return True
+        elif function == xslt.xsltSecurityForbid:
+            return False
+        else:
+            return None
+
+    def __repr__(self):
+        items = sorted(self.options.items())
+        return u"%s(%s)" % (
+            python._fqtypename(self).decode('UTF-8').split(u'.')[-1],
+            u', '.join([u"%s=%r" % item for item in items]))
+
 XSLTAccessControl.DENY_ALL = XSLTAccessControl(
     read_file=False, write_file=False, create_dir=False,
     read_network=False, write_network=False)

@@ -606,7 +606,7 @@ class NumberElement(ObjectifiedDataElement):
         return abs( _numericValueOf(self) )
 
     def __nonzero__(self):
-        return _numericValueOf(self) != 0
+        return bool(_numericValueOf(self))
 
     def __invert__(self):
         return ~ _numericValueOf(self)
@@ -656,10 +656,7 @@ class StringElement(ObjectifiedDataElement):
             return len(text)
 
     def __nonzero__(self):
-        text = textOf(self._c_node)
-        if text is None:
-            return False
-        return len(text) > 0
+        return bool(textOf(self._c_node))
 
     def __cmp__(self, other):
         return _cmpPyvals(self, other)
@@ -769,13 +766,13 @@ def _parseBool(s):
     return bool(value)
 
 def _parseBoolAsInt(text):
-    if text == u'false':
+    if text == 'false':
         return 0
-    elif text == u'true':
+    elif text == 'true':
         return 1
-    elif text == u'0':
+    elif text == '0':
         return 0
-    elif text == u'1':
+    elif text == '1':
         return 1
     return -1
 
@@ -791,17 +788,19 @@ def _strValueOf(obj):
 def _numericValueOf(obj):
     if isinstance(obj, NumberElement):
         return _parseNumber(obj)
-    elif hasattr(obj, u'pyval'):
+    try:
         # not always numeric, but Python will raise the right exception
         return obj.pyval
+    except AttributeError:
+        pass
     return obj
 
 def _parseNumber(element):
     return element._parse_value(textOf(element._c_node))
 
 def _cmpPyvals(left, right):
-    left  = getattr(left,  u'pyval', left)
-    right = getattr(right, u'pyval', right)
+    left  = getattr(left,  'pyval', left)
+    right = getattr(right, 'pyval', right)
     return cmp(left, right)
 
 
@@ -919,19 +918,13 @@ _SCHEMA_TYPE_DICT = {}
 _TYPE_CHECKS = []
 
 def _lower_bool(b):
-    if b:
-        return u"true"
-    else:
-        return u"false"
+    return u"true" if b else u"false"
 
 def __lower_bool(b):
     return _lower_bool(b)
 
 def _pytypename(obj):
-    if python._isString(obj):
-        return u"str"
-    else:
-        return _typename(obj)
+    u"str" if python._isString(obj) else _typename(obj)
 
 def pytypename(obj):
     u"""pytypename(obj)
@@ -1016,7 +1009,7 @@ def _guessPyType(value, defaulttype):
             type_check(value)
             return tested_pytype
         except IGNORABLE_ERRORS:
-            # could not be parsed as the specififed type => ignore
+            # could not be parsed as the specified type => ignore
             pass
     return defaulttype
 
@@ -1024,7 +1017,7 @@ def _guessElementClass(c_node):
     value = textOf(c_node)
     if value is None:
         return None
-    if value == u'':
+    if value == '':
         return StringElement
 
     for type_check, pytype in _TYPE_CHECKS:
@@ -1071,6 +1064,17 @@ class _ObjectifyElementMakerCaller(object):
                         elementMaker._tag)
                     cetree.appendChild(element, childElement)
                 has_children = 1
+            elif isinstance(child, dict):
+                for name, value in child.items():
+                    # keyword arguments in attrib take precedence
+                    if name in attrib:
+                        continue
+                    pytype = _PYTYPE_DICT.get(_typename(value))
+                    if pytype is not None:
+                        value = pytype.stringify(value)
+                    elif not python._isString(value):
+                        value = unicode(value)
+                    cetree.setAttributeValue(element, name, value)
             else:
                 if pytype_name is not None:
                     # concatenation always makes the result a string
@@ -1115,11 +1119,12 @@ class ElementMaker(object):
     Example::
 
       >>> M = ElementMaker(annotate=False)
-      >>> html = M.html( M.body( M.p('hello', M.br, 'objectify') ) )
+      >>> attributes = {'class': 'par'}
+      >>> html = M.html( M.body( M.p('hello', attributes, M.br, 'objectify', style="font-weight: bold") 
 
       >>> from lxml.etree import tostring
       >>> print(tostring(html, method='html').decode('ascii'))
-      <html><body><p>hello<br>objectify</p></body></html>
+      <html><body><p style="font-weight: bold" class="par">hello<br>objectify</p></body></html>
 
     To create tags that are not valid Python identifiers, call the factory
     directly and pass the tag name as first argument::
@@ -1135,15 +1140,9 @@ class ElementMaker(object):
     def __init__(self, namespace=None, nsmap=None, annotate=True,
                  makeelement=None):
         if nsmap is None:
-            if annotate:
-                nsmap = _DEFAULT_NSMAP
-            else:
-                nsmap = {}
+            nsmap = _DEFAULT_NSMAP if annotate else {}
         self._nsmap = nsmap
-        if namespace is None:
-            self._namespace = None
-        else:
-            self._namespace = u"{%s}" % namespace
+        self._namespace = None if namespace is None else u"{%s}" % namespace
         self._annotate = annotate
         if makeelement is not None:
             assert callable(makeelement)
@@ -1470,7 +1469,7 @@ def _annotate_element(c_node, doc,
 
     # if element is defined as xsi:nil, represent it as None
     if cetree.attributeValueFromNsName(
-        c_node, _XML_SCHEMA_INSTANCE_NS, "nil") == u"true":
+        c_node, _XML_SCHEMA_INSTANCE_NS, "nil") == "true":
         pytype = NoneType
 
     if  pytype is None and not ignore_xsi:
@@ -1503,9 +1502,9 @@ def _annotate_element(c_node, doc,
                     # everything else is clear enough
                     pytype = TREE_PYTYPE
             else:
-                if old_pytypename == u'none':
+                if old_pytypename == 'none':
                     # transition from lxml 1.x
-                    old_pytypename = u"NoneType"
+                    old_pytypename = "NoneType"
                 dict_result = _PYTYPE_DICT.get(old_pytypename)
                 if dict_result is not None:
                     pytype = dict_result
@@ -1699,9 +1698,9 @@ def parse(f, parser=None, base_url=None):
     return _parse(f, parser, base_url=base_url)
 
 _DEFAULT_NSMAP = {
-    u"py"  : PYTYPE_NAMESPACE,
-    u"xsi" : XML_SCHEMA_INSTANCE_NS,
-    u"xsd" : XML_SCHEMA_NS
+    "py"  : PYTYPE_NAMESPACE,
+    "xsi" : XML_SCHEMA_INSTANCE_NS,
+    "xsd" : XML_SCHEMA_NS
 }
 
 E = ElementMaker()
@@ -1716,6 +1715,7 @@ def Element(_tag, attrib=None, nsmap=None, _pytype=None, **_attributes):
     """
     if attrib is not None:
         if python.PyDict_Size(_attributes):
+            attrib = dict(attrib)
             attrib.update(_attributes)
         _attributes = attrib
     if _pytype is None:

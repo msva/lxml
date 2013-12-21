@@ -6,6 +6,7 @@ from .includes import xmlparser, xmlerror
 from .apihelpers import _namespacedNameFromNsName, _makeElement, _makeSubElement
 from .apihelpers import funicode, funicodeOrNone, funicodeOrEmpty, _appendChild
 from .etree import EMPTY_READ_ONLY_DICT
+from .etree import _documentFactory, _elementFactory, _Element
 from . import python
 from .includes import tree
 
@@ -17,10 +18,35 @@ SAX_EVENT_DOCTYPE =  8
 SAX_EVENT_PI      = 16
 SAX_EVENT_COMMENT = 32
 
-class _SaxParserTarget:
+PARSE_EVENT_FILTER_START     =  1
+PARSE_EVENT_FILTER_END       =  2
+PARSE_EVENT_FILTER_START_NS  =  4
+PARSE_EVENT_FILTER_END_NS    =  8
+PARSE_EVENT_FILTER_COMMENT   = 16
+PARSE_EVENT_FILTER_PI        = 32
+
+def _buildParseEventFilter(events):
+    event_filter = 0
+    for event in events:
+        if event == u'start':
+            event_filter |= PARSE_EVENT_FILTER_START
+        elif event == u'end':
+            event_filter |= PARSE_EVENT_FILTER_END
+        elif event == u'start-ns':
+            event_filter |= PARSE_EVENT_FILTER_START_NS
+        elif event == u'end-ns':
+            event_filter |= PARSE_EVENT_FILTER_END_NS
+        elif event == u'comment':
+            event_filter |= PARSE_EVENT_FILTER_COMMENT
+        elif event == u'pi':
+            event_filter |= PARSE_EVENT_FILTER_PI
+        else:
+            raise ValueError, u"invalid event name '%s'" % event
+    return event_filter
+
+class _SaxParserTarget(object):
     def __init__(self):
         self._sax_event_filter = 0
-        self._sax_event_propagate = 0
 
     def _handleSaxStart(self, tag, attrib, nsmap):
         return None
@@ -36,9 +62,18 @@ class _SaxParserTarget:
         return None
 
 class _SaxParserContext(_ParserContext):
-    u"""This class maps SAX2 events to method calls.
+    u"""This class maps SAX2 events to parser target events.
     """
     _origSaxCData = None
+    _target = None
+    _event_filter = 0
+    _root = None
+
+    def __init__(self):
+        _ParserContext.__init__(self)
+        self._ns_stack = []
+        self._node_stack = []
+        self.events_iterator = _ParseEventsIterator()
 
     def _setSaxParserTarget(self, target):
         self._target = target
@@ -46,63 +81,112 @@ class _SaxParserContext(_ParserContext):
     def _initParserContext(self, c_ctxt):
         u"wrap original SAX2 callbacks"
         _ParserContext._initParserContext(self, c_ctxt)
+
+        if self._target is not None:
+            self._connectTarget(c_ctxt)
+        elif self._event_filter:
+            self._connectEvents(c_ctxt)
+
+    def _connectTarget(self, c_ctxt):
         sax = c_ctxt.sax
-        if self._target._sax_event_propagate & SAX_EVENT_START:
-            # propagate => keep orig callback
-            self._origSaxStart = sax.startElementNs
-            self._origSaxStartNoNs = sax.startElement
-        else:
-            # otherwise: never call orig callback
-            self._origSaxStart = sax.startElementNs = xmlparser.ffi.NULL
-            self._origSaxStartNoNs = sax.startElement = xmlparser.ffi.NULL
+        self._origSaxStart = sax.startElementNs = xmlparser.ffi.NULL
+        self._origSaxStartNoNs = sax.startElement = xmlparser.ffi.NULL
         if self._target._sax_event_filter & SAX_EVENT_START:
             # intercept => overwrite orig callback
+            # FIXME: also intercept on when collecting END events
             if sax.initialized == xmlparser.XML_SAX2_MAGIC:
-                sax.startElementNs = _handleSaxStart
-            sax.startElement = _handleSaxStartNoNs
+                sax.startElementNs = _handleSaxTargetStart
+            sax.startElement = _handleSaxTargetStartNoNs
 
-        if self._target._sax_event_propagate & SAX_EVENT_END:
-            self._origSaxEnd = sax.endElementNs
-            self._origSaxEndNoNs = sax.endElement
-        else:
-            self._origSaxEnd = sax.endElementNs = xmlparser.ffi.NULL
-            self._origSaxEndNoNs = sax.endElement = xmlparser.ffi.NULL
+        self._origSaxEnd = sax.endElementNs = xmlparser.ffi.NULL
+        self._origSaxEndNoNs = sax.endElement = xmlparser.ffi.NULL
         if self._target._sax_event_filter & SAX_EVENT_END:
             if sax.initialized == xmlparser.XML_SAX2_MAGIC:
                 sax.endElementNs = _handleSaxEnd
             sax.endElement = _handleSaxEndNoNs
 
-        if self._target._sax_event_propagate & SAX_EVENT_DATA:
-            self._origSaxData = sax.characters
-            self._origSaxCData = sax.cdataBlock
-        else:
-            self._origSaxData = sax.characters = sax.cdataBlock = xmlparser.ffi.NULL
+        self._origSaxData = sax.characters = sax.cdataBlock = xmlparser.ffi.NULL
         if self._target._sax_event_filter & SAX_EVENT_DATA:
-            sax.characters = _handleSaxData
-            sax.cdataBlock = _handleSaxCData
+            sax.characters = sax.cdataBlock = _handleSaxData
 
         # doctype propagation is always required for entity replacement
         self._origSaxDoctype = sax.internalSubset
         if self._target._sax_event_filter & SAX_EVENT_DOCTYPE:
-            sax.internalSubset = _handleSaxDoctype
+            sax.internalSubset = _handleSaxTargetDoctype
 
-        if self._target._sax_event_propagate & SAX_EVENT_PI:
-            self._origSaxPi = sax.processingInstruction
-        else:
-            self._origSaxPi = sax.processingInstruction = xmlparser.ffi.NULL
+        self._origSaxPi = sax.processingInstruction = xmlparser.ffi.NULL
         if self._target._sax_event_filter & SAX_EVENT_PI:
             sax.processingInstruction = _handleSaxPI
 
-        if self._target._sax_event_propagate & SAX_EVENT_COMMENT:
-            self._origSaxComment = sax.comment
-        else:
-            self._origSaxComment = sax.comment = xmlparser.ffi.NULL
+        self._origSaxComment = sax.comment = xmlparser.ffi.NULL
         if self._target._sax_event_filter & SAX_EVENT_COMMENT:
-            sax.comment = _handleSaxComment
+            sax.comment = _handleSaxTargetComment
 
         # enforce entity replacement
         sax.reference = xmlparser.ffi.NULL
         c_ctxt.replaceEntities = 1
+
+    def _connectEvents(self, c_ctxt):
+        """wrap original SAX2 callbacks to collect parse events"""
+        sax = c_ctxt.sax
+        self._origSaxStartDocument = sax.startDocument
+        sax.startDocument = _handleSaxStartDocument
+        self._origSaxStart = sax.startElementNs
+        self._origSaxStartNoNs = sax.startElement
+        # only override start event handler if needed
+        if (self._event_filter == 0 or
+            self._event_filter & (PARSE_EVENT_FILTER_START |
+                                  PARSE_EVENT_FILTER_END |
+                                  PARSE_EVENT_FILTER_START_NS |
+                                  PARSE_EVENT_FILTER_END_NS)):
+            sax.startElementNs = _handleSaxStart
+            sax.startElement = _handleSaxStartNoNs
+
+        self._origSaxEnd = sax.endElementNs
+        self._origSaxEndNoNs = sax.endElement
+        # only override end event handler if needed
+        if (self._event_filter == 0 or
+            self._event_filter & (PARSE_EVENT_FILTER_END |
+                                  PARSE_EVENT_FILTER_END_NS)):
+            sax.endElementNs = _handleSaxEnd
+            sax.endElement = _handleSaxEndNoNs
+
+        self._origSaxComment = sax.comment
+        if self._event_filter & PARSE_EVENT_FILTER_COMMENT:
+            sax.comment = _handleSaxComment
+
+        self._origSaxPI = sax.processingInstruction
+        if self._event_filter & PARSE_EVENT_FILTER_PI:
+            sax.processingInstruction = _handleSaxPIEvent
+
+    def _setEventFilter(self, events, tag):
+        self._event_filter = _buildParseEventFilter(events)
+        if not self._event_filter or tag is None or tag == '*':
+            self._matcher = None
+        else:
+            from .etree import _MultiTagMatcher
+            self._matcher = _MultiTagMatcher(tag)
+
+    def startDocument(self, c_doc):
+        self._doc = _documentFactory(c_doc, None)
+        if self._matcher is not None:
+            self._matcher.cacheTags(self._doc, True) # force entry in libxml2 dict
+
+    def pushEvent(self, event, c_node):
+        if self._root is None:
+            root = self._doc.getroot()
+            if root is not None and root._c_node.type == tree.XML_ELEMENT_NODE:
+                self._root = root
+        node = _elementFactory(self._doc, c_node)
+        self.events_iterator._events.append( (event, node) )
+
+    def flushEvents(self):
+        events = self.events_iterator._events
+        while self._node_stack:
+            events.append( ('end', self._node_stack.pop()) )
+            _pushSaxNsEndEvents(self)
+        while self._ns_stack:
+            _pushSaxNsEndEvents(self)
 
     def _handleSaxException(self, c_ctxt):
         if c_ctxt.errNo == xmlerror.XML_ERR_OK:
@@ -111,6 +195,38 @@ class _SaxParserContext(_ParserContext):
         c_ctxt.wellFormed = 0
         c_ctxt.disableSAX = 1
         self._store_raised()
+
+class _ParseEventsIterator(object):
+    """A reusable parse events iterator"""
+
+    def __init__(self):
+        self._events = []
+        self._event_index = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        events = self._events
+        event_index = self._event_index
+        if event_index * 2 >= len(events):
+            if event_index:
+                # clean up from time to time
+                del events[:event_index]
+                self._event_index = event_index = 0
+            if event_index >= len(events):
+                raise StopIteration
+        item = events[event_index]
+        self._event_index = event_index + 1
+        return item
+    next = __next__
+
+def _appendNsEvents(context, c_nb_namespaces, c_namespaces):
+    for i in xrange(c_nb_namespaces):
+        ns_tuple = (funicodeOrEmpty(c_namespaces[0]),
+                    funicode(c_namespaces[1]))
+        context.events_iterator._events.append( ("start-ns", ns_tuple) )
+        c_namespaces += 2
 
 @xmlparser.ffi.callback("startElementNsSAX2Func")
 def _handleSaxStart(ctxt, c_localname, c_prefix,
@@ -122,16 +238,44 @@ def _handleSaxStart(ctxt, c_localname, c_prefix,
     if not c_ctxt._private:
         return
     context = xmlparser.ffi.from_handle(c_ctxt._private)
-    if context._origSaxStart:
+    try:
+        if (c_nb_namespaces and
+                context._event_filter & PARSE_EVENT_FILTER_START_NS):
+            _appendNsEvents(context, c_nb_namespaces, c_namespaces)
         context._origSaxStart(c_ctxt, c_localname, c_prefix, c_namespace,
                               c_nb_namespaces, c_namespaces, c_nb_attributes,
                               c_nb_defaulted, c_attributes)
+        if c_ctxt.html:
+            _fixHtmlDictNodeNames(c_ctxt.dict, c_ctxt.node)
+
+        if context._event_filter & PARSE_EVENT_FILTER_END_NS:
+            context._ns_stack.append(c_nb_namespaces)
+        if context._event_filter & (PARSE_EVENT_FILTER_END |
+                                    PARSE_EVENT_FILTER_START):
+            _pushSaxStartEvent(context, c_ctxt, c_namespace,
+                               c_localname, None)
+    except:
+        context._handleSaxException(c_ctxt)
+
+@xmlparser.ffi.callback("startElementNsSAX2Func")
+def _handleSaxTargetStart(
+        ctxt, c_localname, c_prefix,
+        c_namespace, c_nb_namespaces,
+        c_namespaces,
+        c_nb_attributes, c_nb_defaulted,
+        c_attributes):
+    c_ctxt = xmlparser.ffi.cast("xmlParserCtxtPtr", ctxt)
+    if not c_ctxt._private:
+        return
+    context = xmlparser.ffi.from_handle(c_ctxt._private)
     try:
-        tag = _namespacedNameFromNsName(c_namespace, c_localname)
+        if (c_nb_namespaces and
+            context._event_filter & PARSE_EVENT_FILTER_START_NS):
+            _appendNsEvents(context, c_nb_namespaces, c_namespaces)
         if c_nb_defaulted > 0:
             # only add default attributes if we asked for them
             if c_ctxt.loadsubset & xmlparser.XML_COMPLETE_ATTRS == 0:
-                c_nb_attributes = c_nb_attributes - c_nb_defaulted
+                c_nb_attributes -= c_nb_defaulted
         if c_nb_attributes == 0:
             attrib = EMPTY_READ_ONLY_DICT
         else:
@@ -140,10 +284,7 @@ def _handleSaxStart(ctxt, c_localname, c_prefix,
                 name = _namespacedNameFromNsName(
                     c_attributes[2], c_attributes[0])
                 if not c_attributes[3]:
-                    if python.IS_PYTHON3:
-                        value = u''
-                    else:
-                        value = ''
+                    value = ''
                 else:
                     value = xmlparser.ffi.buffer(
                         c_attributes[3],
@@ -156,18 +297,20 @@ def _handleSaxStart(ctxt, c_localname, c_prefix,
         else:
             nsmap = {}
             for i in xrange(c_nb_namespaces):
-                if c_namespaces[0] is NULL:
-                    prefix = None
-                else:
-                    prefix = funicode(c_namespaces[0])
+                prefix = funicodeOrNone(c_namespaces[0])
                 nsmap[prefix] = funicode(c_namespaces[1])
                 c_namespaces += 2
-        element = context._target._handleSaxStart(tag, attrib, nsmap)
-        if element is not None and c_ctxt.input:
-            if c_ctxt.input.line < 65535:
-                element._c_node.line = c_ctxt.input.line
-            else:
-                element._c_node.line = 65535
+        element = _callTargetSaxStart(
+            context, c_ctxt,
+            _namespacedNameFromNsName(c_namespace, c_localname),
+            attrib, nsmap)
+
+        if context._event_filter & PARSE_EVENT_FILTER_END_NS:
+            context._ns_stack.append(c_nb_namespaces)
+        if context._event_filter & (PARSE_EVENT_FILTER_END |
+                                    PARSE_EVENT_FILTER_START):
+            _pushSaxStartEvent(context, c_ctxt, c_namespace,
+                               c_localname, element)
     except:
         context._handleSaxException(c_ctxt)
 
@@ -177,34 +320,62 @@ def _handleSaxStartNoNs(ctxt, c_name, c_attributes):
     if not c_ctxt._private:
         return
     context = xmlparser.ffi.from_handle(c_ctxt._private)
-    if context._origSaxStartNoNs:
-        context._origSaxStartNoNs(c_ctxt, c_name, c_attributes)
     try:
-        tag = funicode(c_name)
+        context._origSaxStartNoNs(c_ctxt, c_name, c_attributes)
+        if c_ctxt.html:
+            _fixHtmlDictNodeNames(c_ctxt.dict, c_ctxt.node)
+        if context._event_filter & (PARSE_EVENT_FILTER_END |
+                                    PARSE_EVENT_FILTER_START):
+            _pushSaxStartEvent(context, c_ctxt, xmlparser.ffi.NULL, c_name, None)
+    except:
+        context._handleSaxException(c_ctxt)
+
+
+@xmlparser.ffi.callback("startElementSAXFunc")
+def _handleSaxTargetStartNoNs(ctxt, c_name, c_attributes):
+    c_ctxt = xmlparser.ffi.cast("xmlParserCtxtPtr", ctxt)
+    if not c_ctxt._private:
+        return
+    context = xmlparser.ffi.from_handle(c_ctxt._private)
+    try:
         if not c_attributes:
             attrib = EMPTY_READ_ONLY_DICT
         else:
             attrib = {}
-            while c_attributes[0] is not NULL:
+            while c_attributes[0]:
                 name = funicode(c_attributes[0])
-                if c_attributes[1] is NULL:
-                    if python.IS_PYTHON3:
-                        value = u''
-                    else:
-                        value = ''
-                else:
-                    value = funicode(c_attributes[1])
-                c_attributes = c_attributes + 2
-                attrib[name] = value
-        element = context._target._handleSaxStart(
-            tag, attrib, EMPTY_READ_ONLY_DICT)
-        if element is not None and c_ctxt.input is not NULL:
-            if c_ctxt.input.line < 65535:
-                element._c_node.line = c_ctxt.input.line
-            else:
-                element._c_node.line = 65535
+                attrib[name] = funicodeOrEmpty(c_attributes[1])
+                c_attributes += 2
+        element = _callTargetSaxStart(
+            context, c_ctxt, funicode(c_name),
+            attrib, EMPTY_READ_ONLY_DICT)
+        if context._event_filter & (PARSE_EVENT_FILTER_END |
+                                    PARSE_EVENT_FILTER_START):
+            _pushSaxStartEvent(context, c_ctxt, xmlparser.ffi.NULL, c_name, element)
     except:
         context._handleSaxException(c_ctxt)
+
+def _callTargetSaxStart(context, c_ctxt,
+                        tag, attrib, nsmap):
+    element = context._target._handleSaxStart(tag, attrib, nsmap)
+    if element is not None and c_ctxt.input:
+        if isinstance(element, _Element):
+            element._c_node.line = (
+                c_ctxt.input.line if c_ctxt.input.line < 65535 else 65535)
+    return element
+
+def _pushSaxStartEvent(context, c_ctxt,
+                       c_href, c_name, node):
+    if (context._matcher is None or
+        context._matcher.matchesNsTag(c_href, c_name)):
+        if node is None and context._target is None:
+            assert context._doc is not None
+            node = _elementFactory(context._doc, c_ctxt.node)
+        if context._event_filter & PARSE_EVENT_FILTER_START:
+            context.events_iterator._events.append(('start', node))
+        if (context._target is None and
+                context._event_filter & PARSE_EVENT_FILTER_END):
+            context._node_stack.append(node)
 
 @xmlparser.ffi.callback("endElementNsSAX2Func")
 def _handleSaxEnd(ctxt, c_localname, c_prefix, c_namespace):
@@ -212,11 +383,15 @@ def _handleSaxEnd(ctxt, c_localname, c_prefix, c_namespace):
     if not c_ctxt._private:
         return
     context = xmlparser.ffi.from_handle(c_ctxt._private)
-    if context._origSaxEnd:
-        context._origSaxEnd(c_ctxt, c_localname, c_prefix, c_namespace)
     try:
-        tag = _namespacedNameFromNsName(c_namespace, c_localname)
-        context._target._handleSaxEnd(tag)
+        if context._target is not None:
+            node = context._target._handleSaxEnd(
+                _namespacedNameFromNsName(c_namespace, c_localname))
+        else:
+            context._origSaxEnd(c_ctxt, c_localname, c_prefix, c_namespace)
+            node = None
+        _pushSaxEndEvent(context, c_namespace, c_localname, node)
+        _pushSaxNsEndEvents(context)
     except:
         context._handleSaxException(c_ctxt)
 
@@ -226,21 +401,41 @@ def _handleSaxEndNoNs(ctxt, c_name):
     if not c_ctxt._private:
         return
     context = xmlparser.ffi.from_handle(c_ctxt._private)
-    if context._origSaxEndNoNs:
-        context._origSaxEndNoNs(c_ctxt, c_name)
     try:
-        context._target._handleSaxEnd(funicode(c_name))
+        if context._target is not None:
+            node = context._target._handleSaxEnd(funicode(c_name))
+        else:
+            context._origSaxEndNoNs(c_ctxt, c_name)
+            node = None
+        _pushSaxEndEvent(context, xmlparser.ffi.NULL, c_name, node)
     except:
         context._handleSaxException(c_ctxt)
 
+
+NS_END_EVENT = ('end-ns', None)
+
+def _pushSaxNsEndEvents(context):
+    if context._event_filter & PARSE_EVENT_FILTER_END_NS:
+        for i in range(context._ns_stack.pop()):
+            context.events_iterator._events.append(NS_END_EVENT)
+
+
+def _pushSaxEndEvent(context, c_href, c_name, node):
+    if context._event_filter & PARSE_EVENT_FILTER_END:
+        if (context._matcher is None or
+                context._matcher.matchesNsTag(c_href, c_name)):
+            if context._target is None:
+                node = context._node_stack.pop()
+            context.events_iterator._events.append(('end', node))
+
+
 @xmlparser.ffi.callback("charactersSAXFunc")
 def _handleSaxData(ctxt, c_data, data_len):
+    # can only be called if parsing with a target
     c_ctxt = xmlparser.ffi.cast("xmlParserCtxtPtr", ctxt)
     if not c_ctxt._private or c_ctxt.disableSAX:
         return
     context = xmlparser.ffi.from_handle(c_ctxt._private)
-    if context._origSaxData:
-        context._origSaxData(c_ctxt, c_data, data_len)
     try:
         data = xmlparser.ffi.buffer(c_data, data_len)[:]
         data = data.decode('utf8')
@@ -248,28 +443,14 @@ def _handleSaxData(ctxt, c_data, data_len):
     except:
         context._handleSaxException(c_ctxt)
 
-@xmlparser.ffi.callback("cdataBlockSAXFunc")
-def _handleSaxCData(ctxt, c_data, data_len):
-    c_ctxt = xmlparser.ffi.cast("xmlParserCtxtPtr", ctxt)
-    if not c_ctxt._private or c_ctxt.disableSAX:
-        return
-    context = xmlparser.ffi.from_handle(c_ctxt._private)
-    if context._origSaxCData:
-        context._origSaxCData(c_ctxt, c_data, data_len)
-    try:
-        data = xmlparser.ffi.buffer(c_data, data_len)[:]
-        context._target._handleSaxData(data.decode('utf8'))
-    except:
-        context._handleSaxException(c_ctxt)
 
-@xmlparser.ffi.callback("internalSubsetSAXFunc")
-def _handleSaxDoctype(ctxt, c_name, c_public, c_system):
+def _handleSaxTargetDoctype(ctxt, c_name,
+                            c_public, c_system):
+    # can only be called if parsing with a target
     c_ctxt = xmlparser.ffi.cast("xmlParserCtxtPtr", ctxt)
     if not c_ctxt._private or c_ctxt.disableSAX:
         return
     context = xmlparser.ffi.from_handle(c_ctxt._private)
-    if context._origSaxDoctype:
-        context._origSaxDoctype(c_ctxt, c_name, c_public, c_system)
     try:
         context._target._handleSaxDoctype(
             funicodeOrNone(c_name),
@@ -278,33 +459,85 @@ def _handleSaxDoctype(ctxt, c_name, c_public, c_system):
     except:
         context._handleSaxException(c_ctxt)
 
-@xmlparser.ffi.callback("processingInstructionSAXFunc")
-def _handleSaxPI(ctxt, c_target, c_data):
+
+@xmlparser.ffi.callback("startDocumentSAXFunc")
+def _handleSaxStartDocument(ctxt):
     c_ctxt = xmlparser.ffi.cast("xmlParserCtxtPtr", ctxt)
     if not c_ctxt._private or c_ctxt.disableSAX:
         return
     context = xmlparser.ffi.from_handle(c_ctxt._private)
-    if context._origSaxPi:
-        context._origSaxPi(c_ctxt, c_target, c_data)
+    context._origSaxStartDocument(ctxt)
+    c_doc = c_ctxt.myDoc
+    if c_doc and c_ctxt.dict and not c_doc.dict:
+        # I have no idea why libxml2 disables this - we need it
+        c_ctxt.dictNames = 1
+        c_doc.dict = c_ctxt.dict
     try:
-        context._target._handleSaxPi(
+        context.startDocument(c_doc)
+    except:
+        context._handleSaxException(c_ctxt)
+
+@xmlparser.ffi.callback("processingInstructionSAXFunc")
+def _handleSaxPI(ctxt, c_target, c_data):
+    c_ctxt = xmlparser.ffi.cast("xmlParserCtxtPtr", ctxt)
+    if not c_ctxt._private:
+        return
+    context = xmlparser.ffi.from_handle(c_ctxt._private)
+    try:
+        pi = context._target._handleSaxPi(
             funicodeOrNone(c_target),
             funicodeOrEmpty(c_data))
+        if context._event_filter & PARSE_EVENT_FILTER_PI:
+            context.events_iterator._events.append(('pi', pi))
+    except:
+        context._handleSaxException(c_ctxt)
+
+@xmlparser.ffi.callback("processingInstructionSAXFunc")
+def _handleSaxPIEvent(ctxt, target, data):
+    # can only be called when collecting pi events
+    c_ctxt = xmlparser.ffi.cast("xmlParserCtxtPtr", ctxt)
+    context = xmlparser.ffi.from_handle(c_ctxt._private)
+    context._origSaxPI(ctxt, target, data)
+    c_node = _findLastEventNode(c_ctxt)
+    if c_node:
+        context.pushEvent('pi', c_node)
+
+
+@xmlparser.ffi.callback("commentSAXFunc")
+def _handleSaxTargetComment(ctxt, c_data):
+    c_ctxt = xmlparser.ffi.cast("xmlParserCtxtPtr", ctxt)
+    if not c_ctxt._private:
+        return
+    context = xmlparser.ffi.from_handle(c_ctxt._private)
+    try:
+        comment = context._target._handleSaxComment(funicodeOrEmpty(c_data))
+        if context._event_filter & PARSE_EVENT_FILTER_COMMENT:
+            context.events_iterator._events.append(('comment', comment))
     except:
         context._handleSaxException(c_ctxt)
 
 @xmlparser.ffi.callback("commentSAXFunc")
-def _handleSaxComment(ctxt, c_data):
+def _handleSaxComment(ctxt, text):
+    # can only be called when collecting comment events
     c_ctxt = xmlparser.ffi.cast("xmlParserCtxtPtr", ctxt)
-    if not c_ctxt._private or c_ctxt.disableSAX:
-        return
     context = xmlparser.ffi.from_handle(c_ctxt._private)
-    if context._origSaxComment:
-        context._origSaxComment(c_ctxt, c_data)
-    try:
-        context._target._handleSaxComment(funicodeOrEmpty(c_data))
-    except:
-        context._handleSaxException(c_ctxt)
+    context._origSaxComment(ctxt, text)
+    c_node = _findLastEventNode(c_ctxt)
+    if c_node:
+        context.pushEvent('comment', c_node)
+
+def _findLastEventNode(c_ctxt):
+    # this mimics what libxml2 creates for comments/PIs
+    if c_ctxt.inSubset == 1:
+        return c_ctxt.myDoc.intSubset.last
+    elif c_ctxt.inSubset == 2:
+        return c_ctxt.myDoc.extSubset.last
+    elif not c_ctxt.node:
+        return c_ctxt.myDoc.last
+    elif c_ctxt.node.type == tree.XML_ELEMENT_NODE:
+        return c_ctxt.node.last
+    else:
+        return c_ctxt.node.next
 
 
 ############################################################
@@ -330,7 +563,7 @@ class TreeBuilder(_SaxParserTarget):
         self._parser = parser
 
     def _flush(self):
-        if len(self._data) > 0:
+        if self._data:
             if self._last is not None:
                 text = u"".join(self._data)
                 if self._in_tail:
@@ -342,6 +575,50 @@ class TreeBuilder(_SaxParserTarget):
             del self._data[:]
         return 0
 
+    # internal SAX event handlers
+
+    def _handleSaxStart(self, tag, attrib, nsmap):
+        self._flush()
+        if self._factory is not None:
+            self._last = self._factory(tag, attrib)
+            if self._element_stack:
+                _appendChild(self._element_stack[-1], self._last)
+        elif self._element_stack:
+            self._last = _makeSubElement(
+                self._element_stack[-1], tag, None, None, attrib, nsmap, None)
+        else:
+            self._last = _makeElement(
+                tag, xmlparser.ffi.NULL, None, self._parser, None, None, attrib, nsmap, None)
+        self._element_stack.append(self._last)
+        self._in_tail = 0
+        return self._last
+
+    def _handleSaxEnd(self, tag):
+        self._flush()
+        self._last = self._element_stack_pop()
+        self._in_tail = 1
+        return self._last
+
+    def _handleSaxData(self, data):
+        self._data.append(data)
+
+    def _handleSaxPi(self, target, data):
+        self._flush()
+        self._last = ProcessingInstruction(target, data)
+        if self._element_stack:
+            _appendChild(self._element_stack[-1], self._last)
+        self._in_tail = 1
+        return self._last
+
+    def _handleSaxComment(self, comment):
+        self._flush()
+        from .etree import Comment
+        self._last = Comment(comment)
+        if self._element_stack:
+            _appendChild(self._element_stack[-1], self._last)
+        self._in_tail = 1
+        return self._last
+
     # Python level event handlers
 
     def close(self):
@@ -350,7 +627,7 @@ class TreeBuilder(_SaxParserTarget):
         Flushes the builder buffers, and returns the toplevel document
         element.
         """
-        assert len(self._element_stack) == 0, u"missing end tags"
+        assert not self._element_stack, u"missing end tags"
         assert self._last is not None, u"missing toplevel element"
         return self._last
 
@@ -391,49 +668,3 @@ class TreeBuilder(_SaxParserTarget):
         u"""comment(self, comment)
         """
         return self._handleSaxComment(comment)
-
-    # internal SAX event handlers
-
-    def _handleSaxStart(self, tag, attrib, nsmap):
-        self._flush()
-        if self._factory is not None:
-            self._last = self._factory(tag, attrib)
-            if len(self._element_stack):
-                _appendChild(self._element_stack[-1], self._last)
-        elif len(self._element_stack):
-            self._last = _makeSubElement(
-                self._element_stack[-1], tag, None, None, attrib, nsmap, None)
-        else:
-            self._last = _makeElement(
-                tag, tree.ffi.NULL, None, self._parser, None, None,
-                attrib, nsmap, None)
-        self._element_stack.append(self._last)
-        self._in_tail = 0
-        return self._last
-
-    def _handleSaxEnd(self, tag):
-        self._flush()
-        self._last = self._element_stack_pop()
-        self._in_tail = 1
-        return self._last
-
-    def _handleSaxData(self, data):
-        self._data.append(data)
-
-    def _handleSaxPi(self, target, data):
-        from .etree import ProcessingInstruction
-        self._flush()
-        self._last = ProcessingInstruction(target, data)
-        if self._element_stack:
-            _appendChild(self._element_stack[-1], self._last)
-        self._in_tail = 1
-        return self._last
-
-    def _handleSaxComment(self, comment):
-        from .etree import Comment
-        self._flush()
-        self._last = Comment(comment)
-        if self._element_stack:
-            _appendChild(self._element_stack[-1], self._last)
-        self._in_tail = 1
-        return self._last

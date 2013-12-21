@@ -88,7 +88,9 @@ class _XPathContext(_BaseContext):
 
     def set_context(self, xpathCtxt):
         self._set_xpath_context(xpathCtxt)
-        self._setupDict(xpathCtxt)
+        # This would be a good place to set up the XPath parser dict, but
+        # we cannot use the current thread dict as we do not know which
+        # thread will execute the XPath evaluator - so, no dict for now.
         self.registerLocalNamespaces()
         self.registerLocalFunctions(xpathCtxt, _register_xpath_function)
 
@@ -121,10 +123,6 @@ class _XPathContext(_BaseContext):
             name_utf = self._to_utf(name)
             xpath.xmlXPathRegisterVariable(
                 self._xpathCtxt, name_utf, _wrapXPathObject(value, None, None))
-
-    def _setupDict(self, xpathCtxt):
-        from .parser import _GLOBAL_PARSER_CONTEXT
-        _GLOBAL_PARSER_CONTEXT.initXPathParserDict(xpathCtxt)
 
 
 class _XPathEvaluatorBase:

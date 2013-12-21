@@ -400,16 +400,7 @@ def _tofilelike(f, element, encoding, doctype, method,
                 pretty_print, with_tail, standalone,
                 compression):
     writer = None
-    if encoding is None:
-        c_enc = NULL
-    else:
-        encoding = _utf8(encoding)
-        c_enc = encoding
-    if doctype is None:
-        c_doctype = tree.ffi.NULL
-    else:
-        doctype = _utf8(doctype)
-        c_doctype = _xcstr(doctype)
+
     c_method = _findOutputMethod(method)
     if c_method == OUTPUT_METHOD_TEXT:
         data = _textToString(element._c_node, encoding, with_tail)
@@ -421,7 +412,7 @@ def _tofilelike(f, element, encoding, doctype, method,
                 gzip_file.write(data)
             finally:
                 gzip_file.close()
-            data = bytes_out
+            data = bytes_out.getvalue()
         if _isString(f):
             filename8 = _encodeFilename(f)
             f = open(filename8, 'wb')
@@ -432,6 +423,17 @@ def _tofilelike(f, element, encoding, doctype, method,
         else:
             f.write(data)
         return
+
+    if encoding is None:
+        c_enc = NULL
+    else:
+        encoding = _utf8(encoding)
+        c_enc = encoding
+    if doctype is None:
+        c_doctype = tree.ffi.NULL
+    else:
+        doctype = _utf8(doctype)
+        c_doctype = _xcstr(doctype)
 
     writer, c_buffer = _create_output_buffer(f, c_enc, compression)
 

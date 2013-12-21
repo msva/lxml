@@ -19,7 +19,8 @@ class _ReadOnlyProxy(object):
     def _assertNode(self):
         u"""This is our way of saying: this proxy is invalid!
         """
-        assert self._c_node, u"Proxy invalidated!"
+        if not self._c_node:
+            raise ReferenceError("Proxy invalidated!")
         return 0
 
     def free_after_use(self):
@@ -107,7 +108,7 @@ class _ReadOnlyProxy(object):
         step = 0
         slicelength = 0
         self._assertNode()
-        if python.PySlice_Check(x):
+        if isinstance(x, slice):
             # slicing
             if _isFullSlice(x):
                 return _collectChildren(self)
@@ -325,7 +326,7 @@ def _freeReadOnlyProxies(sourceProxy):
 
 class _OpaqueNodeWrapper(object):
     def __init__(self):
-        raise TypeError, u"This type cannot be instatiated from Python"
+        raise TypeError, u"This type cannot be instantiated from Python"
 
 class _OpaqueDocumentWrapper(_OpaqueNodeWrapper):
     def _assertNode(self):

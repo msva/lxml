@@ -44,7 +44,7 @@ class _BaseContext:
 
         if extensions is not None:
             # convert extensions to UTF-8
-            if python.PyDict_Check(extensions):
+            if isinstance(extensions, dict):
                 extensions = (extensions,)
             # format: [ {(ns, name):function} ] -> {(ns_utf, name_utf):function}
             new_extensions = {}
@@ -58,7 +58,7 @@ class _BaseContext:
             extensions = new_extensions or None
 
         if namespaces is not None:
-            if python.PyDict_Check(namespaces):
+            if isinstance(namespaces, dict):
                 namespaces = namespaces.items()
             if namespaces:
                 ns = []
@@ -127,8 +127,6 @@ class _BaseContext:
         if self._xpathCtxt:
             self._xpathCtxt.userData = xpath.ffi.NULL
             self._xpathCtxt = xpath.ffi.NULL
-
-    # namespaces (internal UTF-8 methods with leading '_')
 
     # namespaces (internal UTF-8 methods with leading '_')
 
@@ -365,7 +363,7 @@ def Extension(module, function_mapping=None, ns=None):
     functions.
     """
     functions = {}
-    if python.PyDict_Check(function_mapping):
+    if isinstance(function_mapping, dict):
         for function_name, xpath_name in function_mapping.items():
             functions[(ns, xpath_name)] = getattr(module, function_name)
     else:
@@ -375,7 +373,6 @@ def Extension(module, function_mapping=None, ns=None):
         for function_name in function_mapping:
             functions[(ns, function_name)] = getattr(module, function_name)
     return functions
-
 
 ################################################################################
 # EXSLT regexp implementation
@@ -388,7 +385,7 @@ class _ExsltRegExp:
         from .etree import _Element
         if _isString(value):
             return value
-        elif python.PyList_Check(value):
+        elif isinstance(value, list):
             # node set: take recursive text concatenation of first element
             if not value:
                 return u''
@@ -473,6 +470,7 @@ class _ExsltRegExp:
         context._addLocalExtensionFunction(ns, b"test",    self.test)
         context._addLocalExtensionFunction(ns, b"match",   self.match)
         context._addLocalExtensionFunction(ns, b"replace", self.replace)
+
 
 ################################################################################
 # helper functions
@@ -628,13 +626,11 @@ def _instantiateElementFromXPath(c_node, doc, context):
         # not from the context document and not from a fake document
         # either => may still be from a known document, e.g. one
         # created by an extension function
-        doc_node = context._findDocumentForNode(c_node)
-        if doc_node is None:
+        doc = context._findDocumentForNode(c_node)
+        if doc is None:
             # not from a known document at all! => can only make a
             # safety copy here
             c_node = tree.xmlDocCopyNode(c_node, doc._c_doc, 1)
-        else:
-            doc = doc_node
     return _fakeDocElementFactory(doc, c_node)
 
 ################################################################################
@@ -754,5 +750,3 @@ def _xpath_function_call(ctxt, nargs):
         xpath.xmlXPathErr(ctxt, xpath.XPATH_UNKNOWN_FUNC_ERROR)
         context._exc._store_exception(
             XPathFunctionError(u"XPath function '%s' not found" % fref))
-
-

@@ -1,12 +1,13 @@
 import sys
 import re
+from itertools import islice
 
 __MAX_LOG_SIZE = 100
 
 from . import python
 from .apihelpers import _assertValidNode, _assertValidDoc
 from .apihelpers import _xmlNameIsValid, _characterReferenceIsValid
-from .apihelpers import _utf8, funicode, _isString
+from .apihelpers import _utf8, _isString, funicode, funicodeOrNone, funicodeOrEmpty
 from .apihelpers import _tagValidOrRaise, _uriValidOrRaise, _htmlTagValidOrRaise, _documentOrRaise
 from .apihelpers import _isFullSlice, _findChildSlice, _replaceSlice, _deleteSlice
 from .apihelpers import _makeElement, _makeSubElement
@@ -16,7 +17,7 @@ from .apihelpers import _collectChildren, _namespacedName, _countElements
 from .apihelpers import _getAttributeValue, _setAttributeValue, _delAttribute
 from .apihelpers import _findChild, _appendChild, _getNsTag, _collectAttributes, _attributeValue
 from .apihelpers import _appendSibling, _prependSibling, _copyNonElementSiblings
-from .apihelpers import _searchNsByHref, _nextElement, _previousElement, _parentElement, _removeNode, _tagMatchesExactly, _mapTagsToQnameMatchArray, _resolveQNameText
+from .apihelpers import _searchNsByHref, _nextElement, _previousElement, _parentElement, _removeNode, _tagMatchesExactly, _nsTagMatchesExactly, _mapTagsToQnameMatchArray, _resolveQNameText
 from .apihelpers import _findChildForwards, _findChildBackwards
 from .apihelpers import _encodeFilename, _decodeFilename
 from . import _elementpath
@@ -458,7 +459,7 @@ class _Element(object):
         _assertValidNode(self)
         if value is None:
             raise ValueError, u"cannot assign None"
-        if python.PySlice_Check(x):
+        if isinstance(x, slice):
             # slice assignment
             c_node, step, slicelength = _findChildSlice(x, self._c_node)
             if step > 0:
@@ -493,7 +494,7 @@ class _Element(object):
         step = 0
         slicelength = 0
         _assertValidNode(self)
-        if python.PySlice_Check(x):
+        if isinstance(x, slice):
             # slice deletion
             if _isFullSlice(x):
                 c_node = self._c_node.children
@@ -718,7 +719,6 @@ class _Element(object):
         u"""Element attribute dictionary. Where possible, use get(), set(),
         keys(), values() and items() to access element attributes.
         """
-        _assertValidNode(self)
         return _Attrib(self)
 
     @property
@@ -771,14 +771,11 @@ class _Element(object):
         """
         _assertValidNode(self)
         line = tree.xmlGetLineNo(self._c_node)
-        if line > 0:
-            return line
-        else:
-            return None
+        return line if line > 0 else None
     @sourceline.setter
     def sourceline(self, line):
         _assertValidNode(self)
-        if line < 0:
+        if line <= 0:
             self._c_node.line = 0
         else:
             self._c_node.line = line
@@ -792,15 +789,15 @@ class _Element(object):
 
         Note that changing the returned dict has no effect on the Element.
         """
-        nsmap = {}
         _assertValidNode(self)
+        nsmap = {}
         c_node = self._c_node
         while c_node and c_node.type == tree.XML_ELEMENT_NODE:
             c_ns = c_node.nsDef
             while c_ns:
-                prefix = None if not c_ns.prefix else funicode(c_ns.prefix)
+                prefix = funicodeOrNone(c_ns.prefix)
                 if prefix not in nsmap:
-                    nsmap[prefix] = None if not c_ns.href else funicode(c_ns.href)
+                    nsmap[prefix] = funicodeOrNone(c_ns.href)
                 c_ns = c_ns.next
             c_node = c_node.parent
         return nsmap
@@ -824,8 +821,10 @@ class _Element(object):
             if not self._doc._c_doc.URL:
                 return None
             return _decodeFilename(tree.ffi.string(self._doc._c_doc.URL))
-        base = _decodeFilename(tree.ffi.string(c_base))
-        tree.xmlFree(c_base)
+        try:
+            base = _decodeFilename(tree.ffi.string(c_base))
+        finally:
+            tree.xmlFree(c_base)
         return base
     @base.setter
     def base(self, url):
@@ -850,7 +849,7 @@ class _Element(object):
         step = 0
         slicelength = 0
         _assertValidNode(self)
-        if python.PySlice_Check(x):
+        if isinstance(x, slice):
             # slicing
             if _isFullSlice(x):
                 return _collectChildren(self)
@@ -867,8 +866,8 @@ class _Element(object):
             c = 0
             while c_node and c < slicelength:
                 result.append(_elementFactory(self._doc, c_node))
-                c = c + 1
-                for i in xrange(step):
+                c += 1
+                for i in range(step):
                     c_node = next_element(c_node)
             return result
         else:
@@ -1150,13 +1149,14 @@ class _Element(object):
         pass ``"{ns}localname"`` as tag. Either or both of ``ns`` and
         ``localname`` can be ``*`` for a wildcard; ``ns`` can be empty
         for no namespace. ``"localname"`` is equivalent to ``"{}localname"``
-        but ``"*"`` is ``"{*}*"``, not ``"{}*"``.
+        (i.e. no namespace) but ``"*"`` is ``"{*}*"`` (any or no namespace),
+        not ``"{}*"``.
 
         You can also pass the Element, Comment, ProcessingInstruction and
         Entity factory functions to look only for the specific element type.
 
-        Passing a sequence of tags will let the iterator return all
-        elements matching any of these tags, in document order.
+        Passing more than one tag will let the iterator return all elements
+        matching any of these tags, in document order.
         """
         if tag is not None:
             tags += (tag,)
@@ -1250,18 +1250,6 @@ class _Element(object):
         return evaluator(_path, **_variables)
 
 
-from .parsertarget import _TargetParserResult
-from .parser import _parseDocument, _newXMLDoc, _copyDocRoot, HTMLParser
-from .proxy import getProxy, hasProxy
-from .proxy import _registerProxy, _unregisterProxy, _releaseProxy
-from .proxy import attemptDeallocation, moveNodeToDocument
-from .proxy import _fakeRootDoc, _destroyFakeDoc
-from .serializer import _tostring, _tofilelike, _tofilelikeC14N, _tostringC14N
-from .serializer import xmlfile
-from .iterparse import iterparse, iterwalk
-from .saxparser import TreeBuilder
-from .extensions import XPathEvalError, XPathResultError, Extension
-
 def _elementFactory(doc, c_node):
     if not c_node:
         return None
@@ -1290,6 +1278,19 @@ def _elementFactory(doc, c_node):
     return result
 
 
+from .parsertarget import _TargetParserResult
+from .parser import _parseDocument, _newXMLDoc, _copyDocRoot, HTMLParser
+from .proxy import getProxy, hasProxy
+from .proxy import _registerProxy, _unregisterProxy, _releaseProxy
+from .proxy import attemptDeallocation, moveNodeToDocument
+from .proxy import _fakeRootDoc, _destroyFakeDoc
+from .serializer import _tostring, _tofilelike, _tofilelikeC14N, _tostringC14N
+from .serializer import xmlfile
+from .iterparse import iterparse, iterwalk
+from .saxparser import TreeBuilder
+from .extensions import XPathEvalError, XPathResultError, Extension
+
+
 class __ContentOnlyElement(_Element):
     def _raiseImmutable(self):
         raise TypeError, u"this element does not have children or attributes"
@@ -1306,6 +1307,12 @@ class __ContentOnlyElement(_Element):
         u"insert(self, index, value)"
         self._raiseImmutable()
 
+    def __getitem__(self, index):
+        if isinstance(x, slice):
+            return []
+        else:
+            raise IndexError, u"list index out of range"        
+
     def __setitem__(self, index, value):
         u"__setitem__(self, index, value)"
         self._raiseImmutable()
@@ -1317,10 +1324,7 @@ class __ContentOnlyElement(_Element):
     @property
     def text(self):
         _assertValidNode(self)
-        if not self._c_node.content:
-            return ''
-        else:
-            return funicode(self._c_node.content)
+        return funicodeOrEmpty(self._c_node.content)
     @text.setter
     def text(self, value):
         _assertValidNode(self)
@@ -1404,8 +1408,8 @@ class _Entity(__ContentOnlyElement):
     def name(self, value):
         _assertValidNode(self)
         value_utf = _utf8(value)
-        assert u'&' not in value and u';' not in value, \
-            u"Invalid entity name '%s'" % value
+        if b'&' in value_utf or b';' in value_utf:
+            raise ValueError(u"Invalid entity name '%s'" % value)
         tree.xmlNodeSetName(self._c_node, _xcstr(value_utf))
 
     @property
@@ -1476,7 +1480,7 @@ class QName:
     def __str__(self):
         return self.text
     def __hash__(self):
-        return self.text.__hash__()
+        return hash(self.text)
     def __cmp__(self, other):
         return cmp(unicode(self), unicode(other))
 
@@ -1507,7 +1511,7 @@ class _ElementTree(object):
             self._context_node = doc.getroot()
             if self._context_node is None:
                 self._doc = doc
-        except _TargetParserResult, result_container:
+        except _TargetParserResult as result_container:
             # raises a TypeError if we don't get an _Element
             if not isinstance(result_container.result, _Element):
                 raise TypeError("Expected Element object, got %s" %
@@ -1700,7 +1704,7 @@ class _ElementTree(object):
         """
         root = self.getroot()
         if root is None:
-            return ()
+            return ITER_EMPTY
         if tag is not None:
             tags += (tag,)
         return root.getiterator(*tags)
@@ -1716,7 +1720,7 @@ class _ElementTree(object):
         """
         root = self.getroot()
         if root is None:
-            return ()
+            return ITER_EMPTY
         if tag is not None:
             tags += (tag,)
         return root.iter(*tags)
@@ -2342,6 +2346,14 @@ class _MultiTagMatcher(object):
                     return True
         return False
 
+    def matchesNsTag(self, c_href, c_name):
+        if tree.XML_ELEMENT_NODE in self._node_types:
+            return True
+        for c_qname in self._cached_tags[:self._tag_count]:
+            if _nsTagMatchesExactly(c_href, c_name, c_qname):
+                return True
+        return False
+
     def matchesAttribute(self, c_attr):
         """Attribute matches differ from Element matches in that they do
         not care about node types.
@@ -2559,7 +2571,7 @@ def fromstring(text, parser=None, base_url=None):
     try:
         doc = _parseMemoryDocument(text, base_url, parser)
         return doc.getroot()
-    except _TargetParserResult, result_container:
+    except _TargetParserResult as result_container:
         return result_container.result
 
 def fromstringlist(strings, parser=None):
@@ -2749,7 +2761,7 @@ def parse(source, parser=None, base_url=None):
     try:
         doc = _parseDocument(source, parser, base_url)
         return _elementTreeFactory(doc, None)
-    except _TargetParserResult, result_container:
+    except _TargetParserResult as result_container:
         return result_container.result
 
 
@@ -2823,6 +2835,7 @@ class _Validator(object):
 from .xpath import XPath, ETXPath, XPathElementEvaluator, XPathDocumentEvaluator
 from .xpath import XPathSyntaxError, XPathEvaluator
 from .parser import XMLParser, ParseError, ParserError, XMLSyntaxError
+from .parser import XMLPullParser
 from .parser import get_default_parser, set_default_parser
 from .xslt import LIBXSLT_VERSION, LIBXSLT_COMPILED_VERSION
 from .xslt import XSLT, XSLTAccessControl, XSLTParseError, XSLTApplyError

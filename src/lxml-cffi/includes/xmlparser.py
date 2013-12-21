@@ -86,6 +86,7 @@ ffi.cdef("""
         void            *userData;        /* For SAX interface only, used by DOM build */
         xmlDocPtr           myDoc;        /* the document being built */
         int            wellFormed;        /* is the document well formed */
+        int              recovery;
         int       replaceEntities;        /* shall we replace entities ? */
         int                  html;        /* an HTML(1)/Docbook(2) document
                                            * 3 is HTML after <head>

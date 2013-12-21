@@ -147,6 +147,8 @@ ffi.cdef("""
     int 	    xsltSetSecurityPrefs	(xsltSecurityPrefsPtr sec,
 						 xsltSecurityOption option,
 						 xsltSecurityCheck func);
+    xsltSecurityCheck	xsltGetSecurityPrefs	(xsltSecurityPrefsPtr sec, 
+						 xsltSecurityOption option);
     int 	    xsltSetCtxtSecurityPrefs	(xsltSecurityPrefsPtr sec,
 						 xsltTransformContextPtr ctxt);
 
@@ -163,10 +165,10 @@ ffi.cdef("""
     /* extras */
     void 	xsltRegisterAllExtras	(void);
 
-    const xmlChar* EXSLT_DATE_NAMESPACE;
-    const xmlChar* EXSLT_SETS_NAMESPACE;
-    const xmlChar* EXSLT_MATH_NAMESPACE;
-    const xmlChar* EXSLT_STRINGS_NAMESPACE;
+    const xmlChar* const EXSLT_DATE_NAMESPACE;
+    const xmlChar* const EXSLT_SETS_NAMESPACE;
+    const xmlChar* const EXSLT_MATH_NAMESPACE;
+    const xmlChar* const EXSLT_STRINGS_NAMESPACE;
 
     void exsltRegisterAll (void);
     int exsltDateXpathCtxtRegister (xmlXPathContextPtr ctxt,
