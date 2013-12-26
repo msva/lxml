@@ -924,7 +924,7 @@ def __lower_bool(b):
     return _lower_bool(b)
 
 def _pytypename(obj):
-    u"str" if python._isString(obj) else _typename(obj)
+    return u"str" if python._isString(obj) else _typename(obj)
 
 def pytypename(obj):
     u"""pytypename(obj)
@@ -1120,7 +1120,7 @@ class ElementMaker(object):
 
       >>> M = ElementMaker(annotate=False)
       >>> attributes = {'class': 'par'}
-      >>> html = M.html( M.body( M.p('hello', attributes, M.br, 'objectify', style="font-weight: bold") 
+      >>> html = M.html( M.body( M.p('hello', attributes, M.br, 'objectify', style="font-weight: bold") ) )
 
       >>> from lxml.etree import tostring
       >>> print(tostring(html, method='html').decode('ascii'))
