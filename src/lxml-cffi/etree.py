@@ -1181,7 +1181,7 @@ class _Element(object):
         """
         if tag is not None:
             tags += (tag,)
-        with_tail = kwargs.pop('with_tail', False)
+        with_tail = kwargs.pop('with_tail', True)
         if kwargs:
             raise TypeError("unexpected keyword argument")
         return ElementTextIterator(self, tags, with_tail=with_tail)
