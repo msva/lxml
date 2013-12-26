@@ -44,7 +44,7 @@ class ParserError(LxmlError):
     """
     pass
 
-class _ParserDictionaryContext:
+class _ParserDictionaryContext(object):
     # Global parser context to share the string dictionary.
     #
     # This class is a delegate singleton!
@@ -223,7 +223,7 @@ _setupPythonUnicode()
 ## support for file-like objects
 ############################################################
 
-class _FileReaderContext:
+class _FileReaderContext(object):
     def __init__(self, filelike, exc_context, url, encoding=None, close_file=False):
         self._exc_context = exc_context
         self._filelike = filelike
@@ -553,7 +553,6 @@ def _handleParseResult(context, c_ctxt, result, filename, recover, free_doc):
             well_formed = 0
 
         if not well_formed:
-            # free broken document
             if free_doc:
                 tree.xmlFreeDoc(result)
             result = tree.ffi.NULL
@@ -688,7 +687,7 @@ class _BaseParser(object):
                         self._parse_options & xmlparser.XML_PARSE_DTDATTR)
             pctxt = self._newPushParserCtxt()
             if not pctxt:
-                python.PyErr_NoMemory()
+                raise MemoryError()
             _initParserContext(
                 self._push_parser_context, self._resolvers, pctxt)
             if self._remove_comments:
@@ -797,6 +796,13 @@ class _BaseParser(object):
         parser._schema = self._schema
         parser._events_to_collect = self._events_to_collect
         return parser
+
+    def copy(self):
+        u"""copy(self)
+
+        Create a new parser with the same configuration.
+        """
+        return self._copy()
 
     def makeelement(self, _tag, attrib=None, nsmap=None, **_extra):
         u"""makeelement(self, _tag, attrib=None, nsmap=None, **_extra)

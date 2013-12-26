@@ -1,6 +1,7 @@
 # XML serialization and output functions
 
 import gzip
+from io import BytesIO
 
 from .proxy import _fakeRootDoc, _destroyFakeDoc, _plainFakeRootDoc, _copyParentNamespaces
 from .includes.etree_defs import _isElement, _isString

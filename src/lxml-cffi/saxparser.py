@@ -1,6 +1,6 @@
 # SAX-like interfaces
 
-from .parser import _ParserContext
+from .parser import _ParserContext, _fixHtmlDictNodeNames
 from inspect import getargspec as inspect_getargspec
 from .includes import xmlparser, xmlerror
 from .apihelpers import _namespacedNameFromNsName, _makeElement, _makeSubElement
@@ -28,17 +28,17 @@ PARSE_EVENT_FILTER_PI        = 32
 def _buildParseEventFilter(events):
     event_filter = 0
     for event in events:
-        if event == u'start':
+        if event == 'start':
             event_filter |= PARSE_EVENT_FILTER_START
-        elif event == u'end':
+        elif event == 'end':
             event_filter |= PARSE_EVENT_FILTER_END
-        elif event == u'start-ns':
+        elif event == 'start-ns':
             event_filter |= PARSE_EVENT_FILTER_START_NS
-        elif event == u'end-ns':
+        elif event == 'end-ns':
             event_filter |= PARSE_EVENT_FILTER_END_NS
-        elif event == u'comment':
+        elif event == 'comment':
             event_filter |= PARSE_EVENT_FILTER_COMMENT
-        elif event == u'pi':
+        elif event == 'pi':
             event_filter |= PARSE_EVENT_FILTER_PI
         else:
             raise ValueError, u"invalid event name '%s'" % event
@@ -79,15 +79,14 @@ class _SaxParserContext(_ParserContext):
         self._target = target
 
     def _initParserContext(self, c_ctxt):
-        u"wrap original SAX2 callbacks"
         _ParserContext._initParserContext(self, c_ctxt)
-
         if self._target is not None:
             self._connectTarget(c_ctxt)
         elif self._event_filter:
             self._connectEvents(c_ctxt)
 
     def _connectTarget(self, c_ctxt):
+        """wrap original SAX2 callbacks to call into parser target"""
         sax = c_ctxt.sax
         self._origSaxStart = sax.startElementNs = xmlparser.ffi.NULL
         self._origSaxStartNoNs = sax.startElement = xmlparser.ffi.NULL
@@ -114,7 +113,7 @@ class _SaxParserContext(_ParserContext):
         if self._target._sax_event_filter & SAX_EVENT_DOCTYPE:
             sax.internalSubset = _handleSaxTargetDoctype
 
-        self._origSaxPi = sax.processingInstruction = xmlparser.ffi.NULL
+        self._origSaxPI = sax.processingInstruction = xmlparser.ffi.NULL
         if self._target._sax_event_filter & SAX_EVENT_PI:
             sax.processingInstruction = _handleSaxPI
 
@@ -444,6 +443,7 @@ def _handleSaxData(ctxt, c_data, data_len):
         context._handleSaxException(c_ctxt)
 
 
+@xmlparser.ffi.callback("internalSubsetSAXFunc")
 def _handleSaxTargetDoctype(ctxt, c_name,
                             c_public, c_system):
     # can only be called if parsing with a target

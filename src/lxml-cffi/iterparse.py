@@ -1,8 +1,8 @@
 # iterparse -- event-driven parsing
 from .parser import _BaseParser, _ParserContext, _GLOBAL_PARSER_CONTEXT
 from .parser import _XML_DEFAULT_PARSE_OPTIONS
-from .parser import _raiseParseError, _fixHtmlDictNodeNames, _htmlCtxtResetPush
-from .parser import XMLPullParser
+from .parser import _raiseParseError, _htmlCtxtResetPush
+from .parser import XMLPullParser, HTMLPullParser
 from .apihelpers import _encodeFilename, _getFilenameForFile, funicode
 from .apihelpers import _rootNodeOrRaise, _findChildForwards
 from .includes import xmlparser, xmlerror, tree, htmlparser
@@ -130,11 +130,6 @@ class iterparse(object):
         self._parser = parser
         self._source = source
 
-    def _createContext(self, target):
-        context = _IterparseContext()
-        context._setEventFilter(self._events, self._tag)
-        return context
-
     @property
     def error_log(self):
         return self._parser.feed_error_log
@@ -143,6 +138,7 @@ class iterparse(object):
         if self._source is None:
             return
         if not self._close_source_after_read:
+            self._source = None
             return
         try:
             close = self._source.close

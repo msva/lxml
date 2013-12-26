@@ -1049,7 +1049,7 @@ class _Element(object):
             return None
         return _elementFactory(self._doc, c_node)
 
-    def itersiblings(self, tag=None, preceding=False, *tags):
+    def itersiblings(self, tag=None, *tags, **kwargs):
         u"""itersiblings(self, tag=None, *tags, preceding=False)
 
         Iterate over the following or preceding siblings of this element.
@@ -1065,6 +1065,9 @@ class _Element(object):
         """
         if tag is not None:
             tags += (tag,)
+        preceding = kwargs.pop('preceding', False)
+        if kwargs:
+            raise TypeError("unexpected keyword argument")
         return SiblingsIterator(self, tags, preceding=preceding)
 
     def iterancestors(self, tag=None, *tags):
@@ -1092,7 +1095,7 @@ class _Element(object):
             tags += (tag,)
         return ElementDepthFirstIterator(self, tags, inclusive=False)
 
-    def iterchildren(self, tag=None, reversed=False, *tags):
+    def iterchildren(self, tag=None, *tags, **kwargs):
         u"""iterchildren(self, tag=None, *tags, reversed=False)
 
         Iterate over the children of this element.
@@ -1103,6 +1106,9 @@ class _Element(object):
         """
         if tag is not None:
             tags += (tag,)
+        reversed = kwargs.pop('reversed', False)
+        if kwargs:
+            raise TypeError("unexpected keyword argument")
         return ElementChildIterator(self, tags, reversed=reversed)
 
     def getroottree(self):
@@ -1162,7 +1168,7 @@ class _Element(object):
             tags += (tag,)
         return ElementDepthFirstIterator(self, tags)
 
-    def itertext(self, tag=None, with_tail=True, *tags):
+    def itertext(self, tag=None, *tags, **kwargs):
         u"""itertext(self, tag=None, *tags, with_tail=True)
 
         Iterates over the text content of a subtree.
@@ -1175,6 +1181,9 @@ class _Element(object):
         """
         if tag is not None:
             tags += (tag,)
+        with_tail = kwargs.pop('with_tail', False)
+        if kwargs:
+            raise TypeError("unexpected keyword argument")
         return ElementTextIterator(self, tags, with_tail=with_tail)
 
     def makeelement(self, _tag, attrib=None, nsmap=None, **_extra):
@@ -1308,7 +1317,7 @@ class __ContentOnlyElement(_Element):
         self._raiseImmutable()
 
     def __getitem__(self, index):
-        if isinstance(x, slice):
+        if isinstance(index, slice):
             return []
         else:
             raise IndexError, u"list index out of range"        
