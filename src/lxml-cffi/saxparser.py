@@ -234,7 +234,7 @@ def _handleSaxStart(ctxt, c_localname, c_prefix,
                     c_nb_attributes, c_nb_defaulted,
                     c_attributes):
     c_ctxt = xmlparser.ffi.cast("xmlParserCtxtPtr", ctxt)
-    if not c_ctxt._private:
+    if not c_ctxt._private or c_ctxt.disableSAX:
         return
     context = xmlparser.ffi.from_handle(c_ctxt._private)
     try:
@@ -264,7 +264,7 @@ def _handleSaxTargetStart(
         c_nb_attributes, c_nb_defaulted,
         c_attributes):
     c_ctxt = xmlparser.ffi.cast("xmlParserCtxtPtr", ctxt)
-    if not c_ctxt._private:
+    if not c_ctxt._private or c_ctxt.disableSAX:
         return
     context = xmlparser.ffi.from_handle(c_ctxt._private)
     try:
@@ -316,7 +316,7 @@ def _handleSaxTargetStart(
 @xmlparser.ffi.callback("startElementSAXFunc")
 def _handleSaxStartNoNs(ctxt, c_name, c_attributes):
     c_ctxt = xmlparser.ffi.cast("xmlParserCtxtPtr", ctxt)
-    if not c_ctxt._private:
+    if not c_ctxt._private or c_ctxt.disableSAX:
         return
     context = xmlparser.ffi.from_handle(c_ctxt._private)
     try:
@@ -333,7 +333,7 @@ def _handleSaxStartNoNs(ctxt, c_name, c_attributes):
 @xmlparser.ffi.callback("startElementSAXFunc")
 def _handleSaxTargetStartNoNs(ctxt, c_name, c_attributes):
     c_ctxt = xmlparser.ffi.cast("xmlParserCtxtPtr", ctxt)
-    if not c_ctxt._private:
+    if not c_ctxt._private or c_ctxt.disableSAX:
         return
     context = xmlparser.ffi.from_handle(c_ctxt._private)
     try:
@@ -379,7 +379,7 @@ def _pushSaxStartEvent(context, c_ctxt,
 @xmlparser.ffi.callback("endElementNsSAX2Func")
 def _handleSaxEnd(ctxt, c_localname, c_prefix, c_namespace):
     c_ctxt = xmlparser.ffi.cast("xmlParserCtxtPtr", ctxt)
-    if not c_ctxt._private:
+    if not c_ctxt._private or c_ctxt.disableSAX:
         return
     context = xmlparser.ffi.from_handle(c_ctxt._private)
     try:
@@ -397,7 +397,7 @@ def _handleSaxEnd(ctxt, c_localname, c_prefix, c_namespace):
 @xmlparser.ffi.callback("endElementSAXFunc")
 def _handleSaxEndNoNs(ctxt, c_name):
     c_ctxt = xmlparser.ffi.cast("xmlParserCtxtPtr", ctxt)
-    if not c_ctxt._private:
+    if not c_ctxt._private or c_ctxt.disableSAX:
         return
     context = xmlparser.ffi.from_handle(c_ctxt._private)
     try:
@@ -480,7 +480,7 @@ def _handleSaxStartDocument(ctxt):
 @xmlparser.ffi.callback("processingInstructionSAXFunc")
 def _handleSaxPI(ctxt, c_target, c_data):
     c_ctxt = xmlparser.ffi.cast("xmlParserCtxtPtr", ctxt)
-    if not c_ctxt._private:
+    if not c_ctxt._private or c_ctxt.disableSAX:
         return
     context = xmlparser.ffi.from_handle(c_ctxt._private)
     try:
@@ -496,6 +496,8 @@ def _handleSaxPI(ctxt, c_target, c_data):
 def _handleSaxPIEvent(ctxt, target, data):
     # can only be called when collecting pi events
     c_ctxt = xmlparser.ffi.cast("xmlParserCtxtPtr", ctxt)
+    if not c_ctxt._private or c_ctxt.disableSAX:
+        return
     context = xmlparser.ffi.from_handle(c_ctxt._private)
     context._origSaxPI(ctxt, target, data)
     c_node = _findLastEventNode(c_ctxt)
@@ -506,7 +508,7 @@ def _handleSaxPIEvent(ctxt, target, data):
 @xmlparser.ffi.callback("commentSAXFunc")
 def _handleSaxTargetComment(ctxt, c_data):
     c_ctxt = xmlparser.ffi.cast("xmlParserCtxtPtr", ctxt)
-    if not c_ctxt._private:
+    if not c_ctxt._private or c_ctxt.disableSAX:
         return
     context = xmlparser.ffi.from_handle(c_ctxt._private)
     try:
@@ -520,6 +522,8 @@ def _handleSaxTargetComment(ctxt, c_data):
 def _handleSaxComment(ctxt, text):
     # can only be called when collecting comment events
     c_ctxt = xmlparser.ffi.cast("xmlParserCtxtPtr", ctxt)
+    if not c_ctxt._private or c_ctxt.disableSAX:
+        return
     context = xmlparser.ffi.from_handle(c_ctxt._private)
     context._origSaxComment(ctxt, text)
     c_node = _findLastEventNode(c_ctxt)
