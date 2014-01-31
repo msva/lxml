@@ -2,14 +2,23 @@
 
 from lxml.includes cimport uri
 
+cdef object OrderedDict = None
+try:
+    from collections import OrderedDict
+except ImportError:
+    pass
+
 cdef void displayNode(xmlNode* c_node, indent):
     # to help with debugging
     cdef xmlNode* c_child
-    print indent * u' ', <long>c_node
-    c_child = c_node.children
-    while c_child is not NULL:
-        displayNode(c_child, indent + 1)
-        c_child = c_child.next
+    try:
+        print indent * u' ', <long>c_node
+        c_child = c_node.children
+        while c_child is not NULL:
+            displayNode(c_child, indent + 1)
+            c_child = c_child.next
+    finally:
+        return  # swallow any exceptions
 
 cdef inline int _assertValidNode(_Element element) except -1:
     assert element._c_node is not NULL, u"invalid Element proxy at %s" % id(element)
@@ -35,10 +44,10 @@ cdef _Document _documentOrRaise(object input):
         doc = <_Document>input
     else:
         raise TypeError, u"Invalid input object: %s" % \
-            python._fqtypename(input)
+            python._fqtypename(input).decode('utf8')
     if doc is None:
         raise ValueError, u"Input object has no document: %s" % \
-            python._fqtypename(input)
+            python._fqtypename(input).decode('utf8')
     _assertValidDoc(doc)
     return doc
 
@@ -57,17 +66,17 @@ cdef _Element _rootNodeOrRaise(object input):
         node = (<_Document>input).getroot()
     else:
         raise TypeError, u"Invalid input object: %s" % \
-            python._fqtypename(input)
+            python._fqtypename(input).decode('utf8')
     if (node is None or not node._c_node or
             node._c_node.type != tree.XML_ELEMENT_NODE):
         raise ValueError, u"Input object has no element: %s" % \
-            python._fqtypename(input)
+            python._fqtypename(input).decode('utf8')
     _assertValidNode(node)
     return node
 
 cdef _Element _makeElement(tag, xmlDoc* c_doc, _Document doc,
                            _BaseParser parser, text, tail, attrib, nsmap,
-                           extra_attrs):
+                           dict extra_attrs):
     u"""Create a new element and initialize text content, namespaces and
     attributes.
 
@@ -124,10 +133,10 @@ cdef _Element _makeElement(tag, xmlDoc* c_doc, _Document doc,
         raise
 
 cdef int _initNewElement(_Element element, bint is_html, name_utf, ns_utf,
-                         _BaseParser parser, attrib, nsmap, extra_attrs) except -1:
+                         _BaseParser parser, attrib, nsmap, dict extra_attrs) except -1:
     u"""Initialise a new Element object.
 
-    This is used when users instantiate a Python Element class
+    This is used when users instantiate a Python Element subclass
     directly, without it being mapped to an existing XML node.
     """
     cdef xmlDoc* c_doc
@@ -154,7 +163,7 @@ cdef int _initNewElement(_Element element, bint is_html, name_utf, ns_utf,
     return 0
 
 cdef _Element _makeSubElement(_Element parent, tag, text, tail,
-                              attrib, nsmap, extra_attrs):
+                              attrib, nsmap, dict extra_attrs):
     u"""Create a new child element and initialize text content, namespaces and
     attributes.
     """
@@ -242,34 +251,51 @@ cdef int _initNodeNamespaces(xmlNode* c_node, _Document doc,
         doc._setNodeNs(c_node, _xcstr(node_ns_utf))
     return 0
 
-cdef _initNodeAttributes(xmlNode* c_node, _Document doc, attrib, extra):
+cdef _initNodeAttributes(xmlNode* c_node, _Document doc, attrib, dict extra):
     u"""Initialise the attributes of an element node.
     """
     cdef bint is_html
     cdef xmlNs* c_ns
-    # 'extra' is not checked here (expected to be a keyword dict)
     if attrib is not None and not hasattr(attrib, u'items'):
         raise TypeError, u"Invalid attribute dictionary: %s" % \
-            python._fqtypename(attrib)
+            python._fqtypename(attrib).decode('utf8')
+    if not attrib and not extra:
+        return  # nothing to do
+    is_html = doc._parser._for_html
+    seen = set()
     if extra:
-        if attrib is None:
-            attrib = extra
-        else:
-            attrib.update(extra)
+        for name, value in sorted(extra.items()):
+            _addAttributeToNode(c_node, doc, is_html, name, value, seen)
     if attrib:
-        is_html = doc._parser._for_html
-        for name, value in sorted(attrib.items()):
-            attr_ns_utf, attr_name_utf = _getNsTag(name)
-            if not is_html:
-                _attributeValidOrRaise(attr_name_utf)
-            value_utf = _utf8(value)
-            if attr_ns_utf is None:
-                tree.xmlNewProp(c_node, _xcstr(attr_name_utf), _xcstr(value_utf))
-            else:
-                _uriValidOrRaise(attr_ns_utf)
-                c_ns = doc._findOrBuildNodeNs(c_node, _xcstr(attr_ns_utf), NULL, 1)
-                tree.xmlNewNsProp(c_node, c_ns,
-                                  _xcstr(attr_name_utf), _xcstr(value_utf))
+        # attrib will usually be a plain unordered dict
+        if type(attrib) is dict:
+            attrib = sorted(attrib.items())
+        elif isinstance(attrib, _Attrib) or (
+                OrderedDict is not None and isinstance(attrib, OrderedDict)):
+            attrib = attrib.items()
+        else:
+            # assume it's an unordered mapping of some kind
+            attrib = sorted(attrib.items())
+        for name, value in attrib:
+            _addAttributeToNode(c_node, doc, is_html, name, value, seen)
+
+cdef int _addAttributeToNode(xmlNode* c_node, _Document doc, bint is_html,
+                             name, value, set seen_tags) except -1:
+    ns_utf, name_utf = tag = _getNsTag(name)
+    if tag in seen_tags:
+        return 0
+    seen_tags.add(tag)
+    if not is_html:
+        _attributeValidOrRaise(name_utf)
+    value_utf = _utf8(value)
+    if ns_utf is None:
+        tree.xmlNewProp(c_node, _xcstr(name_utf), _xcstr(value_utf))
+    else:
+        _uriValidOrRaise(ns_utf)
+        c_ns = doc._findOrBuildNodeNs(c_node, _xcstr(ns_utf), NULL, 1)
+        tree.xmlNewNsProp(c_node, c_ns,
+                          _xcstr(name_utf), _xcstr(value_utf))
+    return 0
 
 ctypedef struct _ns_node_ref:
     xmlNs* ns
@@ -584,7 +610,7 @@ cdef object _stripEncodingDeclaration(object xml_string):
     # this is a hack to remove the XML encoding declaration from unicode
     return __REPLACE_XML_ENCODING(ur'\g<1>\g<2>', xml_string)
 
-cdef bint _hasEncodingDeclaration(object xml_string):
+cdef bint _hasEncodingDeclaration(object xml_string) except -1:
     # check if a (unicode) string has an XML encoding declaration
     return __HAS_XML_ENCODING(xml_string) is not None
 
@@ -725,7 +751,7 @@ cdef int _findChildSlice(
         c_start_node[0] = _findChild(c_parent, start)
     return 0
 
-cdef bint _isFullSlice(slice sliceobject):
+cdef bint _isFullSlice(slice sliceobject) except -1:
     u"""Conservative guess if this slice is a full slice as in ``s[:]``.
     """
     cdef Py_ssize_t step = 0
@@ -1231,6 +1257,7 @@ cdef int _appendChild(_Element parent, _Element child) except -1:
     # uh oh, elements may be pointing to different doc when
     # parent element has moved; change them too..
     moveNodeToDocument(parent._doc, c_source_doc, c_node)
+    return 0
 
 cdef int _prependChild(_Element parent, _Element child) except -1:
     u"""Prepend a new child to a parent element.
@@ -1256,6 +1283,7 @@ cdef int _prependChild(_Element parent, _Element child) except -1:
     # uh oh, elements may be pointing to different doc when
     # parent element has moved; change them too..
     moveNodeToDocument(parent._doc, c_source_doc, c_node)
+    return 0
 
 cdef int _appendSibling(_Element element, _Element sibling) except -1:
     u"""Add a new sibling behind an element.
@@ -1272,6 +1300,7 @@ cdef int _appendSibling(_Element element, _Element sibling) except -1:
     # uh oh, elements may be pointing to different doc when
     # parent element has moved; change them too..
     moveNodeToDocument(element._doc, c_source_doc, c_node)
+    return 0
 
 cdef int _prependSibling(_Element element, _Element sibling) except -1:
     u"""Add a new sibling before an element.
@@ -1288,6 +1317,7 @@ cdef int _prependSibling(_Element element, _Element sibling) except -1:
     # uh oh, elements may be pointing to different doc when
     # parent element has moved; change them too..
     moveNodeToDocument(element._doc, c_source_doc, c_node)
+    return 0
 
 cdef inline int isutf8(const_xmlChar* s):
     cdef xmlChar c = s[0]
@@ -1375,21 +1405,22 @@ cdef bint _isFilePath(const_xmlChar* c_path):
     # test if it looks like an absolute Unix path or a Windows network path
     if c_path[0] == c'/':
         return 1
-    # test if it looks like an absolute Windows path
+
+    # test if it looks like an absolute Windows path or URL
     if (c_path[0] >= c'a' and c_path[0] <= c'z') or \
             (c_path[0] >= c'A' and c_path[0] <= c'Z'):
-        if c_path[1] == c':':
-            return 1
-    # test if it looks like a relative path
-    while c_path[0] != c'\0':
-        c = c_path[0]
-        if c == c':':
-            return 0
-        elif c == c'/':
-            return 1
-        elif c == c'\\':
-            return 1
         c_path += 1
+        if c_path[0] == c':' and c_path[1] in b'\0\\':
+            return 1  # C: or C:\...
+
+        # test if it looks like a URL with scheme://
+        while (c_path[0] >= c'a' and c_path[0] <= c'z') or \
+                (c_path[0] >= c'A' and c_path[0] <= c'Z'):
+            c_path += 1
+        if c_path[0] == c':' and c_path[1] == c'/' and c_path[2] == c'/':
+            return 0
+
+    # assume it's a relative path
     return 1
 
 cdef object _encodeFilename(object filename):
@@ -1541,32 +1572,32 @@ cdef bint _characterReferenceIsValid(const_xmlChar* c_name):
 
 cdef int _tagValidOrRaise(tag_utf) except -1:
     if not _pyXmlNameIsValid(tag_utf):
-        raise ValueError("Invalid tag name %r" %
+        raise ValueError(u"Invalid tag name %r" %
                          (<bytes>tag_utf).decode('utf8'))
     return 0
 
 cdef int _htmlTagValidOrRaise(tag_utf) except -1:
     if not _pyHtmlNameIsValid(tag_utf):
-        raise ValueError("Invalid HTML tag name %r" %
+        raise ValueError(u"Invalid HTML tag name %r" %
                          (<bytes>tag_utf).decode('utf8'))
     return 0
 
 cdef int _attributeValidOrRaise(name_utf) except -1:
     if not _pyXmlNameIsValid(name_utf):
-        raise ValueError("Invalid attribute name %r" %
+        raise ValueError(u"Invalid attribute name %r" %
                          (<bytes>name_utf).decode('utf8'))
     return 0
 
 cdef int _prefixValidOrRaise(tag_utf) except -1:
     if not _pyXmlNameIsValid(tag_utf):
-        raise ValueError("Invalid namespace prefix %r" %
+        raise ValueError(u"Invalid namespace prefix %r" %
                          (<bytes>tag_utf).decode('utf8'))
     return 0
 
 cdef int _uriValidOrRaise(uri_utf) except -1:
     cdef uri.xmlURI* c_uri = uri.xmlParseURI(_cstr(uri_utf))
     if c_uri is NULL:
-        raise ValueError("Invalid namespace URI %r" %
+        raise ValueError(u"Invalid namespace URI %r" %
                          (<bytes>uri_utf).decode('utf8'))
     uri.xmlFreeURI(c_uri)
     return 0

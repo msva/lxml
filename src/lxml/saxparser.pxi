@@ -63,6 +63,7 @@ cdef class _SaxParserContext(_ParserContext):
     u"""This class maps SAX2 events to parser target events.
     """
     cdef _SaxParserTarget _target
+    cdef _BaseParser _parser
     cdef xmlparser.startElementNsSAX2Func _origSaxStart
     cdef xmlparser.endElementNsSAX2Func   _origSaxEnd
     cdef xmlparser.startElementSAXFunc    _origSaxStartNoNs
@@ -84,9 +85,10 @@ cdef class _SaxParserContext(_ParserContext):
     cdef _Element  _root
     cdef _MultiTagMatcher _matcher
 
-    def __cinit__(self):
+    def __cinit__(self, _BaseParser parser):
         self._ns_stack = []
         self._node_stack = []
+        self._parser = parser
         self.events_iterator = _ParseEventsIterator()
 
     cdef void _setSaxParserTarget(self, _SaxParserTarget target):
@@ -180,7 +182,10 @@ cdef class _SaxParserContext(_ParserContext):
             self._matcher = _MultiTagMatcher(tag)
 
     cdef int startDocument(self, xmlDoc* c_doc) except -1:
-        self._doc = _documentFactory(c_doc, None)
+        try:
+            self._doc = _documentFactory(c_doc, self._parser)
+        finally:
+            self._parser = None  # clear circular reference ASAP
         if self._matcher is not None:
             self._matcher.cacheTags(self._doc, True) # force entry in libxml2 dict
         return 0
@@ -282,6 +287,8 @@ cdef void _handleSaxStart(
                                c_localname, None)
     except:
         context._handleSaxException(c_ctxt)
+    finally:
+        return  # swallow any further exceptions
 
 
 cdef void _handleSaxTargetStart(
@@ -339,6 +346,8 @@ cdef void _handleSaxTargetStart(
                                c_localname, element)
     except:
         context._handleSaxException(c_ctxt)
+    finally:
+        return  # swallow any further exceptions
 
 
 cdef void _handleSaxStartNoNs(void* ctxt, const_xmlChar* c_name,
@@ -356,6 +365,8 @@ cdef void _handleSaxStartNoNs(void* ctxt, const_xmlChar* c_name,
             _pushSaxStartEvent(context, c_ctxt, NULL, c_name, None)
     except:
         context._handleSaxException(c_ctxt)
+    finally:
+        return  # swallow any further exceptions
 
 
 cdef void _handleSaxTargetStartNoNs(void* ctxt, const_xmlChar* c_name,
@@ -381,6 +392,8 @@ cdef void _handleSaxTargetStartNoNs(void* ctxt, const_xmlChar* c_name,
             _pushSaxStartEvent(context, c_ctxt, NULL, c_name, element)
     except:
         context._handleSaxException(c_ctxt)
+    finally:
+        return  # swallow any further exceptions
 
 
 cdef _callTargetSaxStart(_SaxParserContext context,
@@ -430,6 +443,8 @@ cdef void _handleSaxEnd(void* ctxt, const_xmlChar* c_localname,
         _pushSaxNsEndEvents(context)
     except:
         context._handleSaxException(c_ctxt)
+    finally:
+        return  # swallow any further exceptions
 
 
 cdef void _handleSaxEndNoNs(void* ctxt, const_xmlChar* c_name) with gil:
@@ -446,6 +461,8 @@ cdef void _handleSaxEndNoNs(void* ctxt, const_xmlChar* c_name) with gil:
         _pushSaxEndEvent(context, NULL, c_name, node)
     except:
         context._handleSaxException(c_ctxt)
+    finally:
+        return  # swallow any further exceptions
 
 
 cdef tuple NS_END_EVENT = ('end-ns', None)
@@ -482,6 +499,8 @@ cdef void _handleSaxData(void* ctxt, const_xmlChar* c_data, int data_len) with g
             c_data[:data_len].decode('utf8'))
     except:
         context._handleSaxException(c_ctxt)
+    finally:
+        return  # swallow any further exceptions
 
 
 cdef void _handleSaxTargetDoctype(void* ctxt, const_xmlChar* c_name,
@@ -497,6 +516,8 @@ cdef void _handleSaxTargetDoctype(void* ctxt, const_xmlChar* c_name,
             funicodeOrNone(c_system))
     except:
         context._handleSaxException(c_ctxt)
+    finally:
+        return  # swallow any further exceptions
 
 
 cdef void _handleSaxStartDocument(void* ctxt) with gil:
@@ -508,10 +529,13 @@ cdef void _handleSaxStartDocument(void* ctxt) with gil:
         # I have no idea why libxml2 disables this - we need it
         c_ctxt.dictNames = 1
         c_doc.dict = c_ctxt.dict
+        xmlparser.xmlDictReference(c_ctxt.dict)
     try:
         context.startDocument(c_doc)
     except:
         context._handleSaxException(c_ctxt)
+    finally:
+        return  # swallow any further exceptions
 
 
 cdef void _handleSaxPI(void* ctxt, const_xmlChar* c_target,
@@ -529,6 +553,8 @@ cdef void _handleSaxPI(void* ctxt, const_xmlChar* c_target,
             context.events_iterator._events.append(('pi', pi))
     except:
         context._handleSaxException(c_ctxt)
+    finally:
+        return  # swallow any further exceptions
 
 
 cdef void _handleSaxPIEvent(void* ctxt, const_xmlChar* target,
@@ -538,8 +564,14 @@ cdef void _handleSaxPIEvent(void* ctxt, const_xmlChar* target,
     context = <_SaxParserContext>c_ctxt._private
     context._origSaxPI(ctxt, target, data)
     c_node = _findLastEventNode(c_ctxt)
-    if c_node is not NULL:
+    if c_node is NULL:
+        return
+    try:
         context.pushEvent('pi', c_node)
+    except:
+        context._handleSaxException(c_ctxt)
+    finally:
+        return  # swallow any further exceptions
 
 
 cdef void _handleSaxTargetComment(void* ctxt, const_xmlChar* c_data) with gil:
@@ -554,6 +586,8 @@ cdef void _handleSaxTargetComment(void* ctxt, const_xmlChar* c_data) with gil:
             context.events_iterator._events.append(('comment', comment))
     except:
         context._handleSaxException(c_ctxt)
+    finally:
+        return  # swallow any further exceptions
 
 
 cdef void _handleSaxComment(void* ctxt, const_xmlChar* text) with gil:
@@ -562,8 +596,14 @@ cdef void _handleSaxComment(void* ctxt, const_xmlChar* text) with gil:
     context = <_SaxParserContext>c_ctxt._private
     context._origSaxComment(ctxt, text)
     c_node = _findLastEventNode(c_ctxt)
-    if c_node is not NULL:
+    if c_node is NULL:
+        return
+    try:
         context.pushEvent('comment', c_node)
+    except:
+        context._handleSaxException(c_ctxt)
+    finally:
+        return  # swallow any further exceptions
 
 
 cdef inline xmlNode* _findLastEventNode(xmlparser.xmlParserCtxt* c_ctxt):

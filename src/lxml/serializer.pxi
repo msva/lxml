@@ -399,21 +399,24 @@ cdef class _FilelikeWriter:
                 raise IOError, u"File is already closed"
             py_buffer = <bytes>c_buffer[:size]
             self._filelike.write(py_buffer)
-            return size
         except:
+            size = -1
             self._exc_context._store_raised()
-            return -1
+        finally:
+            return size  # and swallow any further exceptions
 
     cdef int close(self):
+        retval = 0
         try:
             if self._close_filelike is not None:
                 self._close_filelike()
             # we should not close the file here as we didn't open it
             self._filelike = None
-            return 0
         except:
+            retval = -1
             self._exc_context._store_raised()
-            return -1
+        finally:
+            return retval  # and swallow any further exceptions
 
 cdef int _writeFilelikeWriter(void* ctxt, char* c_buffer, int length):
     return (<_FilelikeWriter>ctxt).write(c_buffer, length)
@@ -649,7 +652,7 @@ cdef class _IncrementalFileWriter:
     cdef tree.xmlOutputBuffer* _c_out
     cdef bytes _encoding
     cdef const_char* _c_encoding
-    cdef object _target
+    cdef _FilelikeWriter _target
     cdef list _element_stack
     cdef int _status
 
@@ -660,7 +663,8 @@ cdef class _IncrementalFileWriter:
             encoding = b'ASCII'
         self._encoding = encoding
         self._c_encoding = _cstr(encoding) if encoding is not None else NULL
-        self._target = _create_output_buffer(outfile, self._c_encoding, compresslevel, &self._c_out)
+        self._target = _create_output_buffer(
+            outfile, self._c_encoding, compresslevel, &self._c_out)
 
     def __dealloc__(self):
         if self._c_out is not NULL:
@@ -865,14 +869,16 @@ cdef class _IncrementalFileWriter:
                 error_result = xmlerror.XML_ERR_OK
         else:
             tree.xmlOutputBufferClose(self._c_out)
+        self._status = WRITER_FINISHED
         self._c_out = NULL
+        del self._element_stack[:]
         if raise_on_error:
             self._handle_error(error_result)
 
     cdef _handle_error(self, int error_result):
         if error_result != xmlerror.XML_ERR_OK:
-            if self._writer is not None:
-                self._writer._exc_context._raise_if_stored()
+            if self._target is not None:
+                self._target._exc_context._raise_if_stored()
             _raiseSerialisationError(error_result)
 
 @cython.final

@@ -27,13 +27,18 @@ cdef inline bint hasProxy(xmlNode* c_node):
     if c_node._private is NULL:
         return False
     if python.IS_PYPY:
-        if python.PyWeakref_LockObject(<python.PyObject*>c_node._private) is None:
-            # proxy has already died => remove weak reference
-            obj_ptr = <python.PyObject*>c_node._private
-            c_node._private = NULL
-            python.Py_XDECREF(obj_ptr)
-            return False
+        return _isProxyAliveInPypy(c_node)
     return True
+
+cdef bint _isProxyAliveInPypy(xmlNode* c_node):
+    retval = True
+    if python.PyWeakref_LockObject(<python.PyObject*>c_node._private) is None:
+        # proxy has already died => remove weak reference
+        weakref_ptr = <python.PyObject*>c_node._private
+        c_node._private = NULL
+        python.Py_XDECREF(weakref_ptr)
+        retval = False
+    return retval
 
 cdef inline int _registerProxy(_Element proxy, _Document doc,
                                xmlNode* c_node) except -1:
@@ -45,44 +50,22 @@ cdef inline int _registerProxy(_Element proxy, _Document doc,
     proxy._c_node = c_node
     if python.IS_PYPY:
         c_node._private = <void*>python.PyWeakref_NewRef(proxy, NULL)
-        if c_node._private is NULL:
-            return -1 # manual exception propagation
     else:
         c_node._private = <void*>proxy
-    # additional INCREF to make sure _Document is GC-ed LAST!
-    proxy._gc_doc = <python.PyObject*>doc
-    python.Py_INCREF(doc)
     return 0
 
 cdef inline int _unregisterProxy(_Element proxy) except -1:
     u"""Unregister a proxy for the node it's proxying for.
     """
-    cdef xmlNode* c_node
-    c_node = proxy._c_node
+    cdef xmlNode* c_node = proxy._c_node
     if python.IS_PYPY:
-        obj_ptr = <python.PyObject*>c_node._private
+        weakref_ptr = <python.PyObject*>c_node._private
         c_node._private = NULL
-        python.Py_XDECREF(obj_ptr)
+        python.Py_XDECREF(weakref_ptr)
     else:
         assert c_node._private is <void*>proxy, u"Tried to unregister unknown proxy"
         c_node._private = NULL
     return 0
-
-cdef inline void _releaseProxy(_Element proxy):
-    u"""An additional DECREF for the document.
-    """
-    python.Py_XDECREF(proxy._gc_doc)
-    proxy._gc_doc = NULL
-
-cdef inline void _updateProxyDocument(_Element element, _Document doc):
-    u"""Replace the document reference of a proxy.
-    """
-    if element._doc is not doc:
-        old_doc = element._doc
-        element._doc = doc
-        python.Py_INCREF(doc)
-        element._gc_doc = <python.PyObject*>doc
-        python.Py_DECREF(old_doc)
 
 ################################################################################
 # temporarily make a node the root node of its document
@@ -184,29 +167,24 @@ cdef int attemptDeallocation(xmlNode* c_node):
 cdef xmlNode* getDeallocationTop(xmlNode* c_node):
     u"""Return the top of the tree that can be deallocated, or NULL.
     """
-    cdef xmlNode* c_current
-    cdef xmlNode* c_top
     #print "trying to do deallocating:", c_node.type
     if hasProxy(c_node):
         #print "Not freeing: proxies still exist"
         return NULL
-    c_current = c_node.parent
-    c_top = c_node
-    while c_current is not NULL:
+    while c_node.parent is not NULL:
+        c_node = c_node.parent
         #print "checking:", c_current.type
-        if c_current.type == tree.XML_DOCUMENT_NODE or \
-               c_current.type == tree.XML_HTML_DOCUMENT_NODE:
+        if c_node.type == tree.XML_DOCUMENT_NODE or \
+               c_node.type == tree.XML_HTML_DOCUMENT_NODE:
             #print "not freeing: still in doc"
             return NULL
         # if we're still attached to the document, don't deallocate
-        if hasProxy(c_current):
+        if hasProxy(c_node):
             #print "Not freeing: proxies still exist"
             return NULL
-        c_top = c_current
-        c_current = c_current.parent
     # see whether we have children to deallocate
-    if canDeallocateChildNodes(c_top):
-        return c_top
+    if canDeallocateChildNodes(c_node):
+        return c_node
     else:
         return NULL
 
@@ -416,7 +394,8 @@ cdef int moveNodeToDocument(_Document doc, xmlDoc* c_source_doc,
         if proxy_count == 1 and c_start_node._private is not NULL:
             proxy = getProxy(c_start_node)
             if proxy is not None:
-                _updateProxyDocument(proxy, doc)
+                if proxy._doc is not doc:
+                    proxy._doc = doc
             else:
                 fixElementDocument(c_start_node, doc, proxy_count)
         else:
@@ -433,7 +412,8 @@ cdef void fixElementDocument(xmlNode* c_element, _Document doc,
     if c_node._private is not NULL:
         proxy = getProxy(c_node)
         if proxy is not None:
-            _updateProxyDocument(proxy, doc)
+            if proxy._doc is not doc:
+                proxy._doc = doc
             proxy_count -= 1
             if proxy_count == 0:
                 return

@@ -78,6 +78,7 @@ def ext_modules(static_include_dirs, static_library_dirs,
         # generate module cleanup code
         from Cython.Compiler import Options
         Options.generate_cleanup_code = 3
+        Options.clear_to_none = False
     elif not OPTION_WITHOUT_CYTHON and False in c_files_exist:
         for exists, module in zip(c_files_exist, modules):
             if not exists:
@@ -237,6 +238,8 @@ def include_dirs(static_include_dirs):
 
 def cflags(static_cflags):
     result = []
+    if not OPTION_SHOW_WARNINGS:
+        result.append('-w')
     if OPTION_DEBUG_GCC:
         result.append('-g2')
 

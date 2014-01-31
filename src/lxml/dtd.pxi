@@ -19,6 +19,8 @@ class DTDValidateError(DTDError):
 cdef inline int _assertValidDTDNode(node, void *c_node) except -1:
     assert c_node is not NULL, u"invalid DTD proxy at %s" % id(node)
 
+
+@cython.final
 @cython.internal
 @cython.freelist(8)
 cdef class _DTDElementContentDecl:
@@ -36,7 +38,7 @@ cdef class _DTDElementContentDecl:
     property type:
        def __get__(self):
            _assertValidDTDNode(self, self._c_node)
-           type = self._c_node.type
+           cdef int type = self._c_node.type
            if type == tree.XML_ELEMENT_CONTENT_PCDATA:
                return "pcdata"
            elif type == tree.XML_ELEMENT_CONTENT_ELEMENT:
@@ -51,7 +53,7 @@ cdef class _DTDElementContentDecl:
     property occur:
        def __get__(self):
            _assertValidDTDNode(self, self._c_node)
-           occur = self._c_node.ocur
+           cdef int occur = self._c_node.ocur
            if occur == tree.XML_ELEMENT_CONTENT_ONCE:
                return "once"
            elif occur == tree.XML_ELEMENT_CONTENT_OPT:
@@ -67,8 +69,8 @@ cdef class _DTDElementContentDecl:
        def __get__(self):
            _assertValidDTDNode(self, self._c_node)
            c1 = self._c_node.c1
-           if c1 is not NULL:
-               node = _DTDElementContentDecl()
+           if c1:
+               node = <_DTDElementContentDecl>_DTDElementContentDecl.__new__(_DTDElementContentDecl)
                node._dtd = self._dtd
                node._c_node = <tree.xmlElementContent*>c1
                return node
@@ -79,14 +81,16 @@ cdef class _DTDElementContentDecl:
        def __get__(self):
            _assertValidDTDNode(self, self._c_node)
            c2 = self._c_node.c2
-           if c2 is not NULL:
-               node = _DTDElementContentDecl()
+           if c2:
+               node = <_DTDElementContentDecl>_DTDElementContentDecl.__new__(_DTDElementContentDecl)
                node._dtd = self._dtd
                node._c_node = <tree.xmlElementContent*>c2
                return node
            else:
                return None
 
+
+@cython.final
 @cython.internal
 @cython.freelist(8)
 cdef class _DTDAttributeDecl:
@@ -114,7 +118,7 @@ cdef class _DTDAttributeDecl:
     property type:
        def __get__(self):
            _assertValidDTDNode(self, self._c_node)
-           type = self._c_node.atype
+           cdef int type = self._c_node.atype
            if type == tree.XML_ATTRIBUTE_CDATA:
                return "cdata"
            elif type == tree.XML_ATTRIBUTE_ID:
@@ -141,7 +145,7 @@ cdef class _DTDAttributeDecl:
     property default:
        def __get__(self):
            _assertValidDTDNode(self, self._c_node)
-           default = self._c_node.def_
+           cdef int default = self._c_node.def_
            if default == tree.XML_ATTRIBUTE_NONE:
                return "none"
            elif default == tree.XML_ATTRIBUTE_REQUIRED:
@@ -168,6 +172,8 @@ cdef class _DTDAttributeDecl:
     def values(self):
         return list(self.itervalues())
 
+
+@cython.final
 @cython.internal
 @cython.freelist(8)
 cdef class _DTDElementDecl:
@@ -208,8 +214,8 @@ cdef class _DTDElementDecl:
        def __get__(self):
            _assertValidDTDNode(self, self._c_node)
            cdef tree.xmlElementContent *content = self._c_node.content
-           if content is not NULL:
-               node = _DTDElementContentDecl()
+           if content:
+               node = <_DTDElementContentDecl>_DTDElementContentDecl.__new__(_DTDElementContentDecl)
                node._dtd = self._dtd
                node._c_node = content
                return node
@@ -219,8 +225,8 @@ cdef class _DTDElementDecl:
     def iterattributes(self):
         _assertValidDTDNode(self, self._c_node)
         cdef tree.xmlAttribute *c_node = self._c_node.attributes
-        while c_node is not NULL:
-            node = _DTDAttributeDecl()
+        while c_node:
+            node = <_DTDAttributeDecl>_DTDAttributeDecl.__new__(_DTDAttributeDecl)
             node._dtd = self._dtd
             node._c_node = c_node
             yield node
@@ -229,6 +235,8 @@ cdef class _DTDElementDecl:
     def attributes(self):
         return list(self.iterattributes())
 
+
+@cython.final
 @cython.internal
 @cython.freelist(8)
 cdef class _DTDEntityDecl:
@@ -251,6 +259,7 @@ cdef class _DTDEntityDecl:
         def __get__(self):
             _assertValidDTDNode(self, self._c_node)
             return funicode(self._c_node.content) if self._c_node.content is not NULL else None
+
 
 ################################################################################
 # DTD
@@ -388,8 +397,64 @@ cdef DTD _dtdFactory(tree.xmlDtd* c_dtd):
     if c_dtd is NULL:
         return None
     dtd = DTD.__new__(DTD)
-    dtd._c_dtd = tree.xmlCopyDtd(c_dtd)
-    if dtd._c_dtd is NULL:
-        raise MemoryError()
+    dtd._c_dtd = _copyDtd(c_dtd)
     _Validator.__init__(dtd)
     return dtd
+
+
+cdef tree.xmlDtd* _copyDtd(tree.xmlDtd* c_orig_dtd) except NULL:
+    """
+    Copy a DTD.  libxml2 (currently) fails to set up the element->attributes
+    links when copying DTDs, so we have to rebuild them here.
+    """
+    c_dtd = tree.xmlCopyDtd(c_orig_dtd)
+    if not c_dtd:
+        raise MemoryError
+    cdef tree.xmlNode* c_node = c_dtd.children
+    while c_node:
+        if c_node.type == tree.XML_ATTRIBUTE_DECL:
+            _linkDtdAttribute(c_dtd, <tree.xmlAttribute*>c_node)
+        c_node = c_node.next
+    return c_dtd
+
+
+cdef void _linkDtdAttribute(tree.xmlDtd* c_dtd, tree.xmlAttribute* c_attr):
+    """
+    Create the link to the DTD attribute declaration from the corresponding
+    element declaration.
+    """
+    c_elem = dtdvalid.xmlGetDtdElementDesc(c_dtd, c_attr.elem)
+    if not c_elem:
+        # no such element? something is wrong with the DTD ...
+        return
+    c_pos = c_elem.attributes
+    if not c_pos:
+        c_elem.attributes = c_attr
+        c_attr.nexth = NULL
+        return
+    # libxml2 keeps namespace declarations first, and we need to make
+    # sure we don't re-insert attributes that are already there
+    if _isDtdNsDecl(c_attr):
+        if not _isDtdNsDecl(c_pos):
+            c_elem.attributes = c_attr
+            c_attr.nexth = c_pos
+            return
+        while c_pos != c_attr and c_pos.nexth and _isDtdNsDecl(c_pos.nexth):
+            c_pos = c_pos.nexth
+    else:
+        # append at end
+        while c_pos != c_attr and c_pos.nexth:
+            c_pos = c_pos.nexth
+    if c_pos == c_attr:
+        return
+    c_attr.nexth = c_pos.nexth
+    c_pos.nexth = c_attr
+
+
+cdef bint _isDtdNsDecl(tree.xmlAttribute* c_attr):
+    if cstring_h.strcmp(<const_char*>c_attr.name, "xmlns") == 0:
+        return True
+    if (c_attr.prefix is not NULL and
+            cstring_h.strcmp(<const_char*>c_attr.prefix, "xmlns") == 0):
+        return True
+    return False

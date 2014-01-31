@@ -2,6 +2,9 @@ from libc cimport stdio
 from libc.string cimport const_char
 cimport cython
 
+cdef extern from *:
+    cdef bint PEP393_ENABLED "CYTHON_PEP393_ENABLED"
+
 cdef extern from "Python.h":
     ctypedef struct PyObject
     ctypedef struct PyThreadState
@@ -13,6 +16,12 @@ cdef extern from "Python.h":
     cdef void Py_XDECREF(PyObject* o)
 
     cdef stdio.FILE* PyFile_AsFile(object p)
+
+    # PEP 393
+    cdef bint PyUnicode_IS_READY(object u)
+    cdef Py_ssize_t PyUnicode_GET_LENGTH(object u)
+    cdef int PyUnicode_KIND(object u)
+    cdef void* PyUnicode_DATA(object u)
 
     cdef bytes PyUnicode_AsEncodedString(object u, char* encoding,
                                          char* errors)
@@ -72,7 +81,7 @@ cdef extern from "Python.h":
     cdef object PyObject_RichCompare(object o1, object o2, int op)
     cdef int PyObject_RichCompareBool(object o1, object o2, int op)
 
-    PyObject* PyWeakref_NewRef(object ob, PyObject* callback) # used for PyPy only
+    PyObject* PyWeakref_NewRef(object ob, PyObject* callback) except NULL  # used for PyPy only
     object PyWeakref_LockObject(PyObject* ob) # PyPy only
 
     cdef void* PyMem_Malloc(size_t size)
@@ -121,3 +130,6 @@ cdef extern from "etree_defs.h": # redefines some functions as macros
     cdef bint LXML_UNICODE_STRINGS
     cdef bint IS_PYTHON3
     cdef bint IS_PYPY
+
+cdef extern from "lxml_endian.h":
+    cdef bint PY_BIG_ENDIAN  # defined in later Py3.x versions

@@ -49,6 +49,21 @@ extra_options = {}
 if 'setuptools' in sys.modules:
     extra_options['zip_safe'] = False
 
+    try:
+        import pkg_resources
+    except ImportError:
+        pass
+    else:
+        f = open("requirements.txt", "r")
+        try:
+            deps = [str(req) for req in pkg_resources.parse_requirements(f)]
+        finally:
+            f.close()
+        extra_options['extra_require'] = {
+            'source': deps,
+            'cssselect': 'cssselect>=0.7',
+        }
+
 extra_options.update(setupinfo.extra_setup_args())
 
 extra_options['package_data'] = {
@@ -203,6 +218,7 @@ an appropriate version of Cython installed.
     'Programming Language :: Python :: 3.1',
     'Programming Language :: Python :: 3.2',
     'Programming Language :: Python :: 3.3',
+    'Programming Language :: Python :: 3.4',
     'Programming Language :: C',
     'Operating System :: OS Independent',
     'Topic :: Text Processing :: Markup :: HTML',
