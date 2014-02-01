@@ -40,15 +40,6 @@ def _unregisterProxy(proxy):
     del proxy._keepalive
     return 0
 
-def _releaseProxy(proxy):
-    u"""An additional DECREF for the document.
-    """
-
-def _updateProxyDocument(element, doc):
-    u"""Replace the document reference of a proxy.
-    """
-    element._doc = doc
-
 def detachProxy(proxy):
     _unregisterProxy(proxy)
     proxy._c_node = tree.ffi.NULL
@@ -149,23 +140,20 @@ def getDeallocationTop(c_node):
     if c_node._private:
         #print "Not freeing: proxies still exist"
         return None
-    c_current = c_node.parent
-    c_top = c_node
-    while c_current:
+    while c_node.parent:
+        c_node = c_node.parent
         #print "checking:", c_current.type
-        if c_current.type == tree.XML_DOCUMENT_NODE or \
-               c_current.type == tree.XML_HTML_DOCUMENT_NODE:
+        if c_node.type == tree.XML_DOCUMENT_NODE or \
+               c_node.type == tree.XML_HTML_DOCUMENT_NODE:
             #print "not freeing: still in doc"
             return None
         # if we're still attached to the document, don't deallocate
-        if c_current._private:
+        if hasProxy(c_node):
             #print "Not freeing: proxies still exist"
             return None
-        c_top = c_current
-        c_current = c_current.parent
     # see whether we have children to deallocate
-    if canDeallocateChildNodes(c_top):
-        return c_top
+    if canDeallocateChildNodes(c_node):
+        return c_node
     else:
         return tree.ffi.NULL
 
@@ -323,7 +311,7 @@ def moveNodeToDocument(doc, c_source_doc, c_element):
         if proxy_count == 1 and c_start_node._private:
             proxy = getProxy(c_start_node)
             if proxy is not None:
-                _updateProxyDocument(proxy, doc)
+                proxy._doc = doc
             else:
                 fixElementDocument(c_start_node, doc, proxy_count)
         else:
@@ -334,7 +322,7 @@ def fixElementDocument(c_element, doc, proxy_count):
     for c_node in FOR_EACH_FROM(c_element, c_element, 1):
         proxy = getProxy(c_node)
         if proxy is not None:
-            _updateProxyDocument(proxy, doc)
+            proxy._doc = doc
             proxy_count -= 1
             if proxy_count == 0:
                 return

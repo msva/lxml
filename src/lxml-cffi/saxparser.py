@@ -70,9 +70,10 @@ class _SaxParserContext(_ParserContext):
     _root = None
 
     def __init__(self):
-        _ParserContext.__init__(self)
+        _ParserContext.__init__(self, parser)
         self._ns_stack = []
         self._node_stack = []
+        self._parser = parser
         self.events_iterator = _ParseEventsIterator()
 
     def _setSaxParserTarget(self, target):
@@ -167,7 +168,10 @@ class _SaxParserContext(_ParserContext):
             self._matcher = _MultiTagMatcher(tag)
 
     def startDocument(self, c_doc):
-        self._doc = _documentFactory(c_doc, None)
+        try:
+            self._doc = _documentFactory(c_doc, self._parser)
+        finally:
+            self._parser = None  # clear circular reference ASAP
         if self._matcher is not None:
             self._matcher.cacheTags(self._doc, True) # force entry in libxml2 dict
 
@@ -255,6 +259,8 @@ def _handleSaxStart(ctxt, c_localname, c_prefix,
                                c_localname, None)
     except:
         context._handleSaxException(c_ctxt)
+    finally:
+        return  # swallow any further exceptions
 
 @xmlparser.ffi.callback("startElementNsSAX2Func")
 def _handleSaxTargetStart(
@@ -312,6 +318,9 @@ def _handleSaxTargetStart(
                                c_localname, element)
     except:
         context._handleSaxException(c_ctxt)
+    finally:
+        return  # swallow any further exceptions
+
 
 @xmlparser.ffi.callback("startElementSAXFunc")
 def _handleSaxStartNoNs(ctxt, c_name, c_attributes):
@@ -328,6 +337,8 @@ def _handleSaxStartNoNs(ctxt, c_name, c_attributes):
             _pushSaxStartEvent(context, c_ctxt, xmlparser.ffi.NULL, c_name, None)
     except:
         context._handleSaxException(c_ctxt)
+    finally:
+        return  # swallow any further exceptions
 
 
 @xmlparser.ffi.callback("startElementSAXFunc")
@@ -353,6 +364,9 @@ def _handleSaxTargetStartNoNs(ctxt, c_name, c_attributes):
             _pushSaxStartEvent(context, c_ctxt, xmlparser.ffi.NULL, c_name, element)
     except:
         context._handleSaxException(c_ctxt)
+    finally:
+        return  # swallow any further exceptions
+
 
 def _callTargetSaxStart(context, c_ctxt,
                         tag, attrib, nsmap):
@@ -393,6 +407,9 @@ def _handleSaxEnd(ctxt, c_localname, c_prefix, c_namespace):
         _pushSaxNsEndEvents(context)
     except:
         context._handleSaxException(c_ctxt)
+    finally:
+        return  # swallow any further exceptions
+
 
 @xmlparser.ffi.callback("endElementSAXFunc")
 def _handleSaxEndNoNs(ctxt, c_name):
@@ -409,6 +426,8 @@ def _handleSaxEndNoNs(ctxt, c_name):
         _pushSaxEndEvent(context, xmlparser.ffi.NULL, c_name, node)
     except:
         context._handleSaxException(c_ctxt)
+    finally:
+        return  # swallow any further exceptions
 
 
 NS_END_EVENT = ('end-ns', None)
@@ -458,6 +477,8 @@ def _handleSaxTargetDoctype(ctxt, c_name,
             funicodeOrNone(c_system))
     except:
         context._handleSaxException(c_ctxt)
+    finally:
+        return  # swallow any further exceptions
 
 
 @xmlparser.ffi.callback("startDocumentSAXFunc")
@@ -472,10 +493,14 @@ def _handleSaxStartDocument(ctxt):
         # I have no idea why libxml2 disables this - we need it
         c_ctxt.dictNames = 1
         c_doc.dict = c_ctxt.dict
+        xmlparser.xmlDictReference(c_ctxt.dict)
     try:
         context.startDocument(c_doc)
     except:
         context._handleSaxException(c_ctxt)
+    finally:
+        return  # swallow any further exceptions
+
 
 @xmlparser.ffi.callback("processingInstructionSAXFunc")
 def _handleSaxPI(ctxt, c_target, c_data):
@@ -491,6 +516,9 @@ def _handleSaxPI(ctxt, c_target, c_data):
             context.events_iterator._events.append(('pi', pi))
     except:
         context._handleSaxException(c_ctxt)
+    finally:
+        return  # swallow any further exceptions
+
 
 @xmlparser.ffi.callback("processingInstructionSAXFunc")
 def _handleSaxPIEvent(ctxt, target, data):
@@ -501,8 +529,14 @@ def _handleSaxPIEvent(ctxt, target, data):
     context = xmlparser.ffi.from_handle(c_ctxt._private)
     context._origSaxPI(ctxt, target, data)
     c_node = _findLastEventNode(c_ctxt)
-    if c_node:
+    if not c_node:
+        return
+    try:
         context.pushEvent('pi', c_node)
+    except:
+        context._handleSaxException(c_ctxt)
+    finally:
+        return  # swallow any further exceptions
 
 
 @xmlparser.ffi.callback("commentSAXFunc")
@@ -517,6 +551,9 @@ def _handleSaxTargetComment(ctxt, c_data):
             context.events_iterator._events.append(('comment', comment))
     except:
         context._handleSaxException(c_ctxt)
+    finally:
+        return  # swallow any further exceptions
+
 
 @xmlparser.ffi.callback("commentSAXFunc")
 def _handleSaxComment(ctxt, text):
@@ -527,8 +564,15 @@ def _handleSaxComment(ctxt, text):
     context = xmlparser.ffi.from_handle(c_ctxt._private)
     context._origSaxComment(ctxt, text)
     c_node = _findLastEventNode(c_ctxt)
-    if c_node:
+    if not c_node:
+        return
+    try:
         context.pushEvent('comment', c_node)
+    except:
+        context._handleSaxException(c_ctxt)
+    finally:
+        return  # swallow any further exceptions
+
 
 def _findLastEventNode(c_ctxt):
     # this mimics what libxml2 creates for comments/PIs

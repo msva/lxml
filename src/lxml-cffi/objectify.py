@@ -396,7 +396,7 @@ def _appendValue(parent, tag, value):
         new_element = cetree.deepcopyNodeToDocument(
             parent._doc, value._c_node)
         new_element.tag = tag
-        cetree.appendChild(parent, new_element)
+        cetree.appendChildToElement(parent, new_element)
     elif isinstance(value, (list, tuple)):
         for item in value:
             _appendValue(parent, tag, item)
@@ -404,7 +404,7 @@ def _appendValue(parent, tag, value):
         new_element = cetree.makeElement(
             tag, None, parent._doc, None, None, None, None, None, None)
         _setElementValue(new_element, value)
-        cetree.appendChild(parent, new_element)
+        cetree.appendChildToElement(parent, new_element)
         detachProxy(new_element)
 
 def _setElementValue(element, value):
@@ -496,7 +496,7 @@ def _setSlice(sliceobject, target, items):
                 sliceobject.start - 1)
             if not c_node:
                 while pos < len(new_items):
-                    cetree.appendChild(parent, new_items[pos])
+                    cetree.appendChildToElement(parent, new_items[pos])
                     detachProxy(new_items[pos])
                     pos += 1
                 return
@@ -1051,7 +1051,7 @@ class _ObjectifyElementMakerCaller(object):
                 _add_text(element, child)
                 has_string_value = 1
             elif isinstance(child, _Element):
-                cetree.appendChild(element, child)
+                cetree.appendChildToElement(element, child)
                 detachProxy(child)
                 has_children = 1
             elif isinstance(child, _ObjectifyElementMakerCaller):
@@ -1062,7 +1062,7 @@ class _ObjectifyElementMakerCaller(object):
                 else:
                     childElement = elementMaker._element_factory(
                         elementMaker._tag)
-                    cetree.appendChild(element, childElement)
+                    cetree.appendChildToElement(element, childElement)
                 has_children = 1
             elif isinstance(child, dict):
                 for name, value in child.items():

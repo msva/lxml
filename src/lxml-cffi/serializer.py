@@ -372,21 +372,24 @@ class _FilelikeWriter:
                 raise IOError, u"File is already closed"
             py_buffer = tree.ffi.buffer(c_buffer, size)[:]
             self._filelike.write(py_buffer)
-            return size
         except:
+            size = -1
             self._exc_context._store_raised()
-            return -1
+        finally:
+            return size  # and swallow any further exceptions
 
     def close(self):
+        retval = 0
         try:
             if self._close_filelike is not None:
                 self._close_filelike()
             # we should not close the file here as we didn't open it
             self._filelike = None
-            return 0
         except:
+            retval = -1
             self._exc_context._store_raised()
-            return -1
+        finally:
+            return retval  # and swallow any further exceptions
 
 @tree.ffi.callback("xmlOutputWriteCallback")
 def _writeFilelikeWriter(ctxt, c_buffer, length):
@@ -764,14 +767,16 @@ class _IncrementalFileWriter(object):
                 error_result = xmlerror.XML_ERR_OK
         else:
             tree.xmlOutputBufferClose(self._c_out)
+        self._status = WRITER_FINISHED
         self._c_out = None
+        del self._element_stack[:]
         if raise_on_error:
             self._handle_error(error_result)
 
     def _handle_error(self, error_result):
         if error_result != xmlerror.XML_ERR_OK:
-            if self._writer is not None:
-                self._writer._exc_context._raise_if_stored()
+            if self._target is not None:
+                self._target._exc_context._raise_if_stored()
             _raiseSerialisationError(error_result)
 
 class _FileWriterElement:

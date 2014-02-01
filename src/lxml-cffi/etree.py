@@ -444,7 +444,6 @@ class _Element(object):
         if self._c_node:
             _unregisterProxy(self)
             attemptDeallocation(self._c_node)
-        _releaseProxy(self)
 
     # MANIPULATORS
 
@@ -1290,7 +1289,7 @@ def _elementFactory(doc, c_node):
 from .parsertarget import _TargetParserResult
 from .parser import _parseDocument, _newXMLDoc, _copyDocRoot, HTMLParser
 from .proxy import getProxy, hasProxy
-from .proxy import _registerProxy, _unregisterProxy, _releaseProxy
+from .proxy import _registerProxy, _unregisterProxy
 from .proxy import attemptDeallocation, moveNodeToDocument
 from .proxy import _fakeRootDoc, _destroyFakeDoc
 from .serializer import _tostring, _tofilelike, _tofilelikeC14N, _tostringC14N
@@ -1541,17 +1540,15 @@ class _ElementTree(object):
     def __deepcopy__(self, memo):
         if self._context_node is not None:
             root = self._context_node.__copy__()
+            assert root is not None
+            _assertValidNode(root)
             _copyNonElementSiblings(self._context_node._c_node, root._c_node)
             doc = root._doc
             c_doc = self._context_node._doc._c_doc
             if c_doc.intSubset and not doc._c_doc.intSubset:
-                doc._c_doc.intSubset = tree.xmlCopyDtd(c_doc.intSubset)
-                if not doc._c_doc.intSubset:
-                    raise MemoryError()
+                doc._c_doc.intSubset = _copyDtd(c_doc.intSubset)
             if c_doc.extSubset and not doc._c_doc.extSubset:
-                doc._c_doc.extSubset = tree.xmlCopyDtd(c_doc.extSubset)
-                if not doc._c_doc.extSubset:
-                    raise MemoryError()
+                doc._c_doc.extSubset = _copyDtd(c_doc.extSubset)
             return _elementTreeFactory(None, root)
         elif self._doc is not None:
             _assertValidDoc(self._doc)
@@ -1747,11 +1744,8 @@ class _ElementTree(object):
         self._assertHasRoot()
         root = self.getroot()
         if _isString(path):
-            start = path[:1]
-            if start == u"/":
-                path = u"." + path
-            elif start == b"/":
-                path = b"." + path
+            if path[:1] == "/":
+                path = "." + path
         return root.find(path, namespaces)
 
     def findtext(self, path, default=None, namespaces=None):
@@ -1767,11 +1761,8 @@ class _ElementTree(object):
         self._assertHasRoot()
         root = self.getroot()
         if _isString(path):
-            start = path[:1]
-            if start == u"/":
-                path = u"." + path
-            elif start == b"/":
-                path = b"." + path
+            if path[:1] == "/":
+                path = "." + path
         return root.findtext(path, default, namespaces)
 
     def findall(self, path, namespaces=None):
@@ -1787,11 +1778,8 @@ class _ElementTree(object):
         self._assertHasRoot()
         root = self.getroot()
         if _isString(path):
-            start = path[:1]
-            if start == u"/":
-                path = u"." + path
-            elif start == b"/":
-                path = b"." + path
+            if path[:1] == "/":
+                path = "." + path
         return root.findall(path, namespaces)
 
     def xpath(self, _path, namespaces=None, extensions=None,
@@ -1976,9 +1964,13 @@ class CDATA(object):
     CDATA factory.  This factory creates an opaque data object that
     can be used to set Element text.  The usual way to use it is::
 
-        >>> from lxml import etree
-        >>> el = etree.Element('content')
-        >>> el.text = etree.CDATA('a string')
+        >>> el = Element('content')
+        >>> el.text = CDATA('a string')
+
+        >>> print(el.text)
+        a string
+        >>> print(tostring(el, encoding="unicode"))
+        <content><![CDATA[a string]]></content>
     """
     def __init__(self, data):
         self._utf8_data = _utf8(data)
@@ -2066,7 +2058,9 @@ def XML(text, parser=None, base_url=None):
     This function can be used to embed "XML literals" in Python code,
     like in
 
-       >>> root = etree.XML("<root><test/></root>")
+       >>> root = XML("<root><test/></root>")
+       >>> print(root.tag)
+       root
 
     To override the parser with a different ``XMLParser`` you can pass it to
     the ``parser`` keyword argument.
@@ -2075,6 +2069,9 @@ def XML(text, parser=None, base_url=None):
     the document to support relative Paths when looking up external entities
     (DTD, XInclude, ...).
     """
+    if isinstance(strings, (bytes, unicode)):
+        raise ValueError("passing a single string into fromstringlist() is not"
+                         " efficient, use fromstring() instead")
     if parser is None:
         from .parser import _GLOBAL_PARSER_CONTEXT, XMLParser
         parser = _GLOBAL_PARSER_CONTEXT.getDefaultParser()
@@ -2526,7 +2523,7 @@ class ElementTextIterator:
     specific tag name.
 
     You can set the ``with_tail`` keyword argument to ``False`` to skip over
-    tail text.
+    tail text (e.g. if you know that it's only whitespace from pretty-printing).
     """
     def __init__(self, element, tag=None, with_tail=True):
         _assertValidNode(element)
@@ -2707,7 +2704,7 @@ def tostring(element_or_tree, encoding=None, method=u"xml",
                          pretty_print, with_tail, is_standalone)
     else:
         raise TypeError, u"Type '%s' cannot be serialized." % \
-            python._fqtypename(element_or_tree)
+            python._fqtypename(element_or_tree).decode('utf8')
 
 def tounicode(element_or_tree, method=u"xml", pretty_print=False,
               with_tail=True, doctype=None):
