@@ -16,6 +16,7 @@ from .apihelpers import (
     _setNodeText as setNodeText,
     _setTailText as setTailText,
     _appendChild as appendChild,
+    _appendChild as appendChildToElement,
     _rootNodeOrRaise as rootNodeOrRaise,
     _hasText as hasText,
     _utf8 as utf8,

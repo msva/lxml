@@ -13,7 +13,8 @@ ffi.cdef("""
     int 	xmlValidateDtd		(xmlValidCtxtPtr ctxt,
 					 xmlDocPtr doc,
 					 xmlDtdPtr dtd);
-
+    xmlElementPtr	xmlGetDtdElementDesc	(xmlDtdPtr dtd, 
+					 const xmlChar * name);
 """)
 
 libxml = ffi.verify("""

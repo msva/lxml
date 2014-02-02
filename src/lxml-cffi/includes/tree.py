@@ -370,6 +370,7 @@ ffi.cdef("""
                                           const unsigned char *in, int *inlen);
     xmlCharEncoding xmlDetectCharEncoding(const unsigned char *in,
 					 int len);
+    const char *	xmlGetCharEncodingName	(xmlCharEncoding enc);
 
     int xmlValidateNCName	(const xmlChar *value,
 					 int space);

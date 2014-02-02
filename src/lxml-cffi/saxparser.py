@@ -69,8 +69,8 @@ class _SaxParserContext(_ParserContext):
     _event_filter = 0
     _root = None
 
-    def __init__(self):
-        _ParserContext.__init__(self, parser)
+    def __init__(self, parser):
+        _ParserContext.__init__(self)
         self._ns_stack = []
         self._node_stack = []
         self._parser = parser

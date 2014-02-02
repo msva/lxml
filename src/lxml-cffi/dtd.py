@@ -138,7 +138,7 @@ class _DTDAttributeDecl:
     @property
     def default(self):
        _assertValidDTDNode(self, self._c_node)
-       default = self._c_node.def_
+       default = getattr(self._c_node, 'def')
        if default == tree.XML_ATTRIBUTE_NONE:
            return "none"
        elif default == tree.XML_ATTRIBUTE_REQUIRED:
@@ -377,8 +377,64 @@ def _dtdFactory(c_dtd):
     if not c_dtd:
         return None
     dtd = DTD.__new__(DTD)
-    dtd._c_dtd = tree.xmlCopyDtd(c_dtd)
-    if not dtd._c_dtd:
-        raise MemoryError()
+    dtd._c_dtd = _copyDtd(c_dtd)
     _Validator.__init__(dtd)
     return dtd
+
+
+def _copyDtd(c_orig_dtd):
+    """
+    Copy a DTD.  libxml2 (currently) fails to set up the element->attributes
+    links when copying DTDs, so we have to rebuild them here.
+    """
+    c_dtd = tree.xmlCopyDtd(c_orig_dtd)
+    if not c_dtd:
+        raise MemoryError
+    c_node = c_dtd.children
+    while c_node:
+        if c_node.type == tree.XML_ATTRIBUTE_DECL:
+            _linkDtdAttribute(c_dtd, tree.ffi.cast("xmlAttributePtr", c_node))
+        c_node = c_node.next
+    return c_dtd
+
+
+def _linkDtdAttribute(c_dtd, c_attr):
+    """
+    Create the link to the DTD attribute declaration from the corresponding
+    element declaration.
+    """
+    c_elem = dtdvalid.xmlGetDtdElementDesc(c_dtd, c_attr.elem)
+    if not c_elem:
+        # no such element? something is wrong with the DTD ...
+        return
+    c_pos = c_elem.attributes
+    if not c_pos:
+        c_elem.attributes = c_attr
+        c_attr.nexth = tree.ffi.NULL
+        return
+    # libxml2 keeps namespace declarations first, and we need to make
+    # sure we don't re-insert attributes that are already there
+    if _isDtdNsDecl(c_attr):
+        if not _isDtdNsDecl(c_pos):
+            c_elem.attributes = c_attr
+            c_attr.nexth = c_pos
+            return
+        while c_pos != c_attr and c_pos.nexth and _isDtdNsDecl(c_pos.nexth):
+            c_pos = c_pos.nexth
+    else:
+        # append at end
+        while c_pos != c_attr and c_pos.nexth:
+            c_pos = c_pos.nexth
+    if c_pos == c_attr:
+        return
+    c_attr.nexth = c_pos.nexth
+    c_pos.nexth = c_attr
+
+
+def _isDtdNsDecl(c_attr):
+    if tree.ffi.string(c_attr.name) == "xmlns":
+        return True
+    if (c_attr.prefix and
+        tree.ffi.string(c_attr.prefix) == "xmlns"):
+        return True
+    return False

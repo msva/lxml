@@ -1545,6 +1545,7 @@ class _ElementTree(object):
             _copyNonElementSiblings(self._context_node._c_node, root._c_node)
             doc = root._doc
             c_doc = self._context_node._doc._c_doc
+            from .dtd import _copyDtd
             if c_doc.intSubset and not doc._c_doc.intSubset:
                 doc._c_doc.intSubset = _copyDtd(c_doc.intSubset)
             if c_doc.extSubset and not doc._c_doc.extSubset:
@@ -2069,9 +2070,6 @@ def XML(text, parser=None, base_url=None):
     the document to support relative Paths when looking up external entities
     (DTD, XInclude, ...).
     """
-    if isinstance(strings, (bytes, unicode)):
-        raise ValueError("passing a single string into fromstringlist() is not"
-                         " efficient, use fromstring() instead")
     if parser is None:
         from .parser import _GLOBAL_PARSER_CONTEXT, XMLParser
         parser = _GLOBAL_PARSER_CONTEXT.getDefaultParser()
@@ -2589,6 +2587,9 @@ def fromstringlist(strings, parser=None):
     To override the default parser with a different parser you can pass it to
     the ``parser`` keyword argument.
     """
+    if isinstance(strings, (bytes, unicode)):
+        raise ValueError("passing a single string into fromstringlist() is not"
+                         " efficient, use fromstring() instead")
     from .parser import _GLOBAL_PARSER_CONTEXT
     if parser is None:
         parser = _GLOBAL_PARSER_CONTEXT.getDefaultParser()

@@ -182,11 +182,11 @@ def _setupPythonUnicode():
     a matching encoding handler.
     """
     buf = xmlparser.ffi.new("wchar_t[]", u"<test/>")
-    buf = xmlparser.ffi.buffer(buf, 4)[0:4]
+    buf4 = xmlparser.ffi.buffer(buf, 4)[0:4]
     # apparently, libxml2 can't detect UTF-16 on some systems
-    if buf == b'<\0t\0':
+    if buf4 == b'<\0t\0':
         enc = "UTF-16LE"
-    elif buf == b'\0<\0t':
+    elif buf4 == b'\0<\0t':
         enc = "UTF-16BE"
     else:
         # let libxml2 give it a try
@@ -365,7 +365,7 @@ def _local_resolver(c_url, c_pubid, c_context):
 
     if context is None:
         if not __DEFAULT_ENTITY_LOADER:
-            return NULL
+            return tree.ffi.NULL
         return __DEFAULT_ENTITY_LOADER(c_url, c_pubid, c_context)
 
     try:
@@ -843,6 +843,7 @@ class _BaseParser(object):
         """
         buf = xmlparser.ffi.new("wchar_t[]", utext)
         buffer_len = xmlparser.ffi.sizeof(buf) - xmlparser.ffi.sizeof("wchar_t")
+        c_encoding = _UNICODE_ENCODING
 
         context = self._getParserContext()
         context.prepare()
@@ -854,7 +855,7 @@ class _BaseParser(object):
             if 1:
                 if self._for_html:
                     result = htmlparser.htmlCtxtReadMemory(
-                        pctxt, buf, buffer_len, c_filename,c_encoding,
+                        pctxt, buf, buffer_len, c_filename, c_encoding,
                         self._parse_options)
                     if result:
                         if _fixHtmlDictNames(pctxt.dict, result) < 0:
@@ -1009,24 +1010,24 @@ class _FeedParser(_BaseParser):
                 buffer_len = py_buffer_len
             c_filename = self._filename or xmlparser.ffi.NULL
 
-            if c_encoding is NULL and py_buffer_len >= 2:
+            if not c_encoding and py_buffer_len >= 2:
                 # libxml2 can't handle BOMs here, so let's try ourselves
                 if c_data[0] in b'\xfe\xef\xff':
                     # likely a BOM, let's take a closer look
                     c_encoding = _findEncodingName(
-                        <const_xmlChar*>c_data,
-                        4 if py_buffer_len > 4 else <int>py_buffer_len)
-                    if c_encoding is not NULL:
+                        c_data,
+                        4 if py_buffer_len > 4 else py_buffer_len)
+                    if c_encoding:
                         # found it => skip over BOM (if there is one)
                         if (c_data[0] == b'\xef' and
                                 c_data[1] == b'\xbb' and
                                 c_data[2] == b'\xbf'):
-                            c_data += 3  # UTF-8 BOM
+                            c_data = c_data[3:]  # UTF-8 BOM
                             py_buffer_len -= 3
                         elif (c_data[0] == b'\xfe' and c_data[1] == b'\xff' or
                                 c_data[0] == b'\xff' and c_data[1] == b'\xfe'):
                             # UTF-16 BE/LE
-                            c_data += 2
+                            c_data = c_data[2:]
                             py_buffer_len -= 2
 
             if self._for_html:

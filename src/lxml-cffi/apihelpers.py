@@ -5,10 +5,22 @@ from .includes.etree_defs import FOR_EACH_ELEMENT_FROM
 from .includes import tree
 from . import python
 from . import uri
+from collections import OrderedDict
 import sys
 import re
 import os
 
+
+def displayNode(c_node, indent):
+     # to help with debugging
+    try:
+        print indent * u' ', c_node
+        c_child = c_node.children
+        while c_child:
+            displayNode(c_child, indent + 1)
+            c_child = c_child.next
+    finally:
+        return  # swallow any exceptions
 
 def _assertValidNode(element):
     from . import etree
@@ -40,10 +52,10 @@ def _documentOrRaise(input):
         doc = input
     else:
         raise TypeError, u"Invalid input object: %s" % \
-            python._fqtypename(input)
+            python._fqtypename(input).decode('utf8')
     if doc is None:
         raise ValueError, u"Input object has no document: %s" % \
-            python._fqtypename(input)
+            python._fqtypename(input).decode('utf8')
     _assertValidDoc(doc)
     return doc
 
@@ -62,11 +74,11 @@ def _rootNodeOrRaise(input):
         node = input.getroot()
     else:
         raise TypeError, u"Invalid input object: %s" % \
-            python._fqtypename(input)
+            python._fqtypename(input).decode('utf8')
     if (node is None or not node._c_node or
         node._c_node.type != tree.XML_ELEMENT_NODE):
         raise ValueError, u"Input object has no element: %s" % \
-            python._fqtypename(input)
+            python._fqtypename(input).decode('utf8')
     _assertValidNode(node)
     return node
 
@@ -133,7 +145,7 @@ def _initNewElement(element, is_html, name_utf, ns_utf,
                     parser, attrib, nsmap, extra_attrs):
     u"""Initialise a new Element object.
 
-    This is used when users instantiate a Python Element class
+    This is used when users instantiate a Python Element subclass
     directly, without it being mapped to an existing XML node.
     """
     from .parser import _newXMLDoc, _newHTMLDoc
@@ -247,29 +259,42 @@ def _initNodeNamespaces(c_node, doc,
 def _initNodeAttributes(c_node, doc, attrib, extra):
     u"""Initialise the attributes of an element node.
     """
-    # 'extra' is not checked here (expected to be a keyword dict)
     if attrib is not None and not hasattr(attrib, u'items'):
         raise TypeError, u"Invalid attribute dictionary: %s" % \
-            python._fqtypename(attrib)
+            python._fqtypename(attrib).decode('utf8')
+    if not attrib and not extra:
+        return  # nothing to do
+    is_html = doc._parser._for_html
+    seen = set()
     if extra:
-        if attrib is None:
-            attrib = extra
-        else:
-            attrib.update(extra)
+        for name, value in sorted(extra.items()):
+            _addAttributeToNode(c_node, doc, is_html, name, value, seen)
     if attrib:
-        is_html = doc._parser._for_html
-        for name, value in attrib.items():
-            attr_ns_utf, attr_name_utf = _getNsTag(name)
-            if not is_html:
-                _attributeValidOrRaise(attr_name_utf)
-            value_utf = _utf8(value)
-            if attr_ns_utf is None:
-                tree.xmlNewProp(c_node, attr_name_utf, value_utf)
-            else:
-                _uriValidOrRaise(attr_ns_utf)
-                c_ns = doc._findOrBuildNodeNs(c_node, attr_ns_utf, tree.ffi.NULL, 1)
-                tree.xmlNewNsProp(c_node, c_ns,
-                                  attr_name_utf, value_utf)
+        from .etree import _Attrib
+        # attrib will usually be a plain unordered dict
+        if type(attrib) is dict:
+            attrib = sorted(attrib.items())
+        elif isinstance(attrib, (_Attrib, OrderedDict)):
+            attrib = attrib.items()
+        else:
+            # assume it's an unordered mapping of some kind
+            attrib = sorted(attrib.items())
+        for name, value in attrib:
+            _addAttributeToNode(c_node, doc, is_html, name, value, seen)
+
+def _addAttributeToNode(c_node, doc, is_html,
+                        name, value, seen_tags):
+    ns_utf, name_utf = _getNsTag(name)
+    if not is_html:
+        _attributeValidOrRaise(name_utf)
+    value_utf = _utf8(value)
+    if ns_utf is None:
+        tree.xmlNewProp(c_node, name_utf, value_utf)
+    else:
+        _uriValidOrRaise(ns_utf)
+        c_ns = doc._findOrBuildNodeNs(c_node, ns_utf, tree.ffi.NULL, 1)
+        tree.xmlNewNsProp(c_node, c_ns,
+                          name_utf, value_utf)
 
 def _removeUnusedNamespaceDeclarations(c_element):
     u"""Remove any namespace declarations from a subtree that are not used by
@@ -1275,19 +1300,21 @@ def _isFilePath(c_path):
         return 0
     if c_path[0] == '/':
         return 1
-    # test if it looks like an absolute Windows path
+    # test if it looks like an absolute Windows path or URL
     if (c_path[0] >= 'a' and c_path[0] <= 'z') or \
             (c_path[0] >= 'A' and c_path[0] <= 'Z'):
-        if c_path[1] == ':':
-            return 1
-    # test if it looks like a relative path
-    for c in c_path:
-        if c == ':':
+        if c_path[1] == ':' and (len(c_path) == 2 or c_path[2] == '\\'):
+            return 1  # C: or C:\...
+        i = 0
+        # test if it looks like a URL with scheme://
+        while i < len(c_path) and (
+            c_path[i] >= 'a' and c_path[i] <= 'z') or \
+                (c_path[i] >= 'A' and c_path[i] <= 'Z'):
+            i += 1
+        if c_path[i:i+2] == '://':
             return 0
-        elif c == '/':
-            return 1
-        elif c == '\\':
-            return 1
+
+    # assume it's a relative path
     return 1
 
 _FILENAME_ENCODING = (sys.getfilesystemencoding() or sys.getdefaultencoding() or 'ascii')
@@ -1416,28 +1443,28 @@ def _characterReferenceIsValid(c_name):
 
 def _tagValidOrRaise(tag_utf):
     if not _pyXmlNameIsValid(tag_utf):
-        raise ValueError("Invalid tag name %r" %
+        raise ValueError(u"Invalid tag name %r" %
                          tag_utf.decode('utf8'))
 
 def _htmlTagValidOrRaise(tag_utf):
     if not _pyHtmlNameIsValid(tag_utf):
-        raise ValueError("Invalid HTML tag name %r" %
+        raise ValueError(u"Invalid HTML tag name %r" %
                          tag_utf.decode('utf8'))
 
 def _attributeValidOrRaise(name_utf):
     if not _pyXmlNameIsValid(name_utf):
-        raise ValueError("Invalid attribute name %r" %
+        raise ValueError(u"Invalid attribute name %r" %
                          name_utf.decode('utf8'))
 
 def _prefixValidOrRaise(tag_utf):
     if not _pyXmlNameIsValid(tag_utf):
-        raise ValueError("Invalid namespace prefix %r" %
+        raise ValueError(u"Invalid namespace prefix %r" %
                          tag_utf.decode('utf8'))
 
 def _uriValidOrRaise(uri_utf):
     c_uri = uri.xmlParseURI(uri_utf)
     if not c_uri:
-        raise ValueError("Invalid namespace URI %r" %
+        raise ValueError(u"Invalid namespace URI %r" %
                          uri_utf.decode('utf8'))
     uri.xmlFreeURI(c_uri)
     return 0
