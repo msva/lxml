@@ -33,8 +33,13 @@ def _unregisterProxy(proxy):
     """
     c_node = proxy._c_node
     userdata = c_node._private
-    obj = ffi.from_handle(userdata)
-    assert obj is proxy, u"Tried to unregister unknown proxy"
+    try:
+        obj = ffi.from_handle(userdata)
+    except RuntimeError:
+        # Our proxy is dying, nothing else to do
+        pass
+    else:
+        assert obj is proxy, u"Tried to unregister unknown proxy"
     assert proxy._keepalive == userdata
     c_node._private = ffi.NULL
     del proxy._keepalive
