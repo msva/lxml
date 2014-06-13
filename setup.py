@@ -6,6 +6,10 @@ import fnmatch
 # for command line options and supported environment variables, please
 # see the end of 'setupinfo.py'
 
+if sys.version_info < (2, 6) or sys.version_info[:2] in [(3, 0), (3, 1)]:
+    print("This lxml version requires Python 2.6, 2.7, 3.2 or later.")
+    sys.exit(1)
+
 try:
     from setuptools import setup
 except ImportError:
@@ -59,9 +63,11 @@ if 'setuptools' in sys.modules:
             deps = [str(req) for req in pkg_resources.parse_requirements(f)]
         finally:
             f.close()
-        extra_options['extra_require'] = {
+        extra_options['extras_require'] = {
             'source': deps,
             'cssselect': 'cssselect>=0.7',
+            'html5': 'html5lib',
+            'htmlsoup': 'BeautifulSoup4',
         }
 
 extra_options.update(setupinfo.extra_setup_args())
@@ -210,12 +216,9 @@ an appropriate version of Cython installed.
     'License :: OSI Approved :: BSD License',
     'Programming Language :: Cython',
     'Programming Language :: Python :: 2',
-    'Programming Language :: Python :: 2.4',
-    'Programming Language :: Python :: 2.5',
     'Programming Language :: Python :: 2.6',
     'Programming Language :: Python :: 2.7',
     'Programming Language :: Python :: 3',
-    'Programming Language :: Python :: 3.1',
     'Programming Language :: Python :: 3.2',
     'Programming Language :: Python :: 3.3',
     'Programming Language :: Python :: 3.4',

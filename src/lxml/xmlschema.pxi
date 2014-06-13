@@ -54,16 +54,6 @@ cdef class XMLSchema(_Validator):
         if etree is not None:
             doc = _documentOrRaise(etree)
             root_node = _rootNodeOrRaise(etree)
-
-            # work around for libxml2 bug if document is not XML schema at all
-            if _LIBXML_VERSION_INT < 20624:
-                c_node = root_node._c_node
-                c_href = _getNs(c_node)
-                if c_href is NULL or \
-                       tree.xmlStrcmp(
-                           c_href, <unsigned char*>'http://www.w3.org/2001/XMLSchema') != 0:
-                    raise XMLSchemaParseError, u"Document is not XML Schema"
-
             fake_c_doc = _fakeRootDoc(doc._c_doc, root_node._c_node)
             parser_ctxt = xmlschema.xmlSchemaNewDocParserCtxt(fake_c_doc)
         elif file is not None:
@@ -91,9 +81,7 @@ cdef class XMLSchema(_Validator):
                 __GLOBAL_PARSER_CONTEXT.pushImpliedContextFromParser(doc._parser)
                 self._c_schema = xmlschema.xmlSchemaParse(parser_ctxt)
                 __GLOBAL_PARSER_CONTEXT.popImpliedContext()
-
-            if _LIBXML_VERSION_INT >= 20624:
-                xmlschema.xmlSchemaFreeParserCtxt(parser_ctxt)
+            xmlschema.xmlSchemaFreeParserCtxt(parser_ctxt)
 
         if fake_c_doc is not NULL:
             _destroyFakeDoc(doc._c_doc, fake_c_doc)
@@ -133,19 +121,21 @@ cdef class XMLSchema(_Validator):
         if valid_ctxt is NULL:
             raise MemoryError()
 
-        if self._add_attribute_defaults:
-            xmlschema.xmlSchemaSetValidOptions(
-                valid_ctxt, xmlschema.XML_SCHEMA_VAL_VC_I_CREATE)
+        try:
+            if self._add_attribute_defaults:
+                xmlschema.xmlSchemaSetValidOptions(
+                    valid_ctxt, xmlschema.XML_SCHEMA_VAL_VC_I_CREATE)
 
-        xmlschema.xmlSchemaSetValidStructuredErrors(
-            valid_ctxt, _receiveError, <void*>self._error_log)
+            self._error_log.clear()
+            xmlschema.xmlSchemaSetValidStructuredErrors(
+                valid_ctxt, _receiveError, <void*>self._error_log)
 
-        c_doc = _fakeRootDoc(doc._c_doc, root_node._c_node)
-        with nogil:
-            ret = xmlschema.xmlSchemaValidateDoc(valid_ctxt, c_doc)
-        _destroyFakeDoc(doc._c_doc, c_doc)
-
-        xmlschema.xmlSchemaFreeValidCtxt(valid_ctxt)
+            c_doc = _fakeRootDoc(doc._c_doc, root_node._c_node)
+            with nogil:
+                ret = xmlschema.xmlSchemaValidateDoc(valid_ctxt, c_doc)
+            _destroyFakeDoc(doc._c_doc, c_doc)
+        finally:
+            xmlschema.xmlSchemaFreeValidCtxt(valid_ctxt)
 
         if ret == -1:
             raise XMLSchemaValidateError(

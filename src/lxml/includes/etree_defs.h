@@ -5,14 +5,28 @@
 #include "Python.h"
 #ifndef PY_VERSION_HEX
 #  error the development package of Python (header files etc.) is not installed correctly
+#else
+#  if PY_VERSION_HEX < 0x02060000 || PY_MAJOR_VERSION >= 3 && PY_VERSION_HEX < 0x03020000
+#  error this version of lxml requires Python 2.6, 2.7, 3.2 or later
+#  endif
 #endif
+
 #include "libxml/xmlversion.h"
 #ifndef LIBXML_VERSION
 #  error the development package of libxml2 (header files etc.) is not installed correctly
+#else
+#if LIBXML_VERSION < 20700
+#  error minimum required version of libxml2 is 2.7.0
 #endif
+#endif
+
 #include "libxslt/xsltconfig.h"
 #ifndef LIBXSLT_VERSION
 #  error the development package of libxslt (header files etc.) is not installed correctly
+#else
+#if LIBXSLT_VERSION < 10123
+#  error minimum required version of libxslt is 1.1.23
+#endif
 #endif
 
 
@@ -26,7 +40,7 @@
 #    define IS_PYPY 0
 #endif
 
-#if PY_VERSION_HEX >= 0x03000000
+#if PY_MAJOR_VERSION >= 3
 #  define IS_PYTHON3 1
 #else
 #  define IS_PYTHON3 0
@@ -45,15 +59,15 @@
 #  define PyWeakref_LockObject(obj)          (NULL)
 #endif
 
-/* Threading can crash under Python <= 2.4.1 and is not currently supported by PyPy */
-#if PY_VERSION_HEX < 0x02040200 || IS_PYPY
+/* Threading is not currently supported by PyPy */
+#if IS_PYPY
 #  ifndef WITHOUT_THREADING
 #    define WITHOUT_THREADING
 #  endif
 #endif
 
 /* Python 3 doesn't have PyFile_*() anymore */
-#if PY_VERSION_HEX >= 0x03000000
+#if PY_MAJOR_VERSION >= 3
 #  define PyFile_AsFile(o)                   (NULL)
 #else
 #if IS_PYPY
@@ -61,20 +75,8 @@
 #  define PyFile_AsFile(o)                   (NULL)
 #  undef PyUnicode_FromFormat
 #  define PyUnicode_FromFormat(s, a, b)      (NULL)
-#else
-#if PY_VERSION_HEX < 0x02060000
-/* Cython defines these already, but we may not be compiling in Cython code */
-#ifndef PyBytes_CheckExact
-#  define PyBytes_CheckExact(o)              PyString_CheckExact(o)
-#  define PyBytes_Check(o)                   PyString_Check(o)
-#  define PyBytes_FromStringAndSize(s, len)  PyString_FromStringAndSize(s, len)
-#  define PyBytes_FromFormat                 PyString_FromFormat
-#  define PyBytes_GET_SIZE(s)                PyString_GET_SIZE(s)
-#  define PyBytes_AS_STRING(s)               PyString_AS_STRING(s)
-#endif
-/* we currently only use three parameters - MSVC can't compile (s, ...) */
-#  define PyUnicode_FromFormat(s, a, b)      (NULL)
-#endif
+#  undef PyByteArray_Check
+#  define PyByteArray_Check(o)               (0)
 #endif
 #endif
 
@@ -109,53 +111,15 @@
 #  define ENABLE_THREADING 1
 #endif
 
-/* libxml2 version specific setup */
-#if LIBXML_VERSION < 20621
-/* (X|HT)ML_PARSE_COMPACT were added in libxml2 2.6.21 */
-#  define XML_PARSE_COMPACT  1 << 16
-#  define HTML_PARSE_COMPACT XML_PARSE_COMPACT
-
-/* HTML_PARSE_RECOVER was added in libxml2 2.6.21 */
-#  define HTML_PARSE_RECOVER XML_PARSE_RECOVER
-#endif
-
-#if LIBXML_VERSION < 20700
-/* These were added in libxml2 2.7.0 */
-#  define XML_PARSE_OLD10      1 << 17
-#  define XML_PARSE_NOBASEFIX  1 << 18
-#  define XML_PARSE_HUGE       1 << 19
-#  define xmlMemDisplayLast(f,d)
-#endif
-
 #if LIBXML_VERSION < 20704
 /* FIXME: hack to make new error reporting compile in old libxml2 versions */
 #  define xmlStructuredErrorContext NULL
-#endif
-
-/* added to xmlsave API in libxml2 2.6.23 */
-#if LIBXML_VERSION < 20623
-#  define xmlSaveToBuffer(buffer, encoding, options)
-#endif
-
-/* added to xmlsave API in libxml2 2.6.22 */
-#if LIBXML_VERSION < 20622
-#  define XML_SAVE_NO_EMPTY   1<<2  /* no empty tags */
-#  define XML_SAVE_NO_XHTML   1<<3  /* disable XHTML1 specific rules */
-#endif
-
-/* added to xmlsave API in libxml2 2.6.21 */
-#if LIBXML_VERSION < 20621
-#  define XML_SAVE_NO_DECL    1<<1  /* drop the xml declaration */
+#  define xmlXIncludeProcessTreeFlagsData(n,o,d) xmlXIncludeProcessTreeFlags(n,o)
 #endif
 
 /* schematron was added in libxml2 2.6.21 */
 #ifdef LIBXML_SCHEMATRON_ENABLED
 #  define ENABLE_SCHEMATRON 1
-#  if LIBXML_VERSION < 20632
-     /* schematron error reporting was added in libxml2 2.6.32 */
-#    define xmlSchematronSetValidStructuredErrors(ctxt, errorfunc, data)
-#    define XML_SCHEMATRON_OUT_ERROR 0
-#  endif
 #else
 #  define ENABLE_SCHEMATRON 0
 #  define XML_SCHEMATRON_OUT_QUIET 0
@@ -173,6 +137,10 @@
 #  define xmlSchematronValidateDoc(ctxt, doc) 0
 #  define xmlSchematronFreeValidCtxt(ctxt)
 #  define xmlSchematronSetValidStructuredErrors(ctxt, errorfunc, data)
+#endif
+
+#if LIBXML_VERSION < 20900
+#  define XML_PARSE_BIG_LINES 4194304
 #endif
 
 #include "libxml/tree.h"
@@ -220,8 +188,10 @@ long _ftol2( double dblSource ) { return _ftol( dblSource ); }
 #if PY_MAJOR_VERSION < 3
 #define _isString(obj)   (PyString_CheckExact(obj)  || \
                           PyUnicode_CheckExact(obj) || \
-                          PyObject_TypeCheck(obj, &PyBaseString_Type))
+                          PyType_IsSubtype(Py_TYPE(obj), &PyBaseString_Type))
 #else
+/* builtin subtype type checks are almost as fast as exact checks in Py2.7+
+ * and Unicode is more common in Py3 */
 #define _isString(obj)   (PyUnicode_Check(obj) || PyBytes_Check(obj))
 #endif
 

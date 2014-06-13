@@ -17,31 +17,36 @@ MacOS-X, see the specific sections below.
 Requirements
 ------------
 
-You need Python 2.4 or later.
+You need Python 2.6 or later.
 
 Unless you are using a static binary distribution (e.g. from a
 Windows binary installer), you need to install libxml2 and libxslt,
 in particular:
 
-* libxml2 2.6.21 or later. It can be found here:
+* libxml2 2.7.0 or later. It can be found here:
   http://xmlsoft.org/downloads.html
 
-  * We recommend libxml2 2.7.8 or a later version.
-
-  * If you want to use XPath, do not use libxml2 2.6.27.
+  * We recommend libxml2 2.9.0 or a later version.
 
   * If you want to use the feed parser interface, especially when
     parsing from unicode strings, do not use libxml2 2.7.4 through
     2.7.6.
 
-* libxslt 1.1.15 or later. It can be found here:
+* libxslt 1.1.23 or later. It can be found here:
   http://xmlsoft.org/XSLT/downloads.html
 
-  * We recommend libxslt 1.1.26 or later.
+  * We recommend libxslt 1.1.26 or later. Version 1.1.25 will not
+    work.
 
 Newer versions generally contain fewer bugs and are therefore
 recommended.  XML Schema support is also still worked on in libxml2,
 so newer versions will give you better compliance with the W3C spec.
+
+To install the required development packages of these dependencies
+on Linux systems, use your distribution specific installation tool,
+e.g. apt-get on Debian/Ubuntu::
+
+  sudo apt-get install libxml2-dev libxslt-dev python-dev
 
 .. _PyPI: http://pypi.python.org/pypi/lxml
 
@@ -149,11 +154,13 @@ others pay for it.
 
 Due to the additional lack of package management of this platform,
 it is best to link the library dependencies statically if you decide
-to build from sources.  For that, use the `binary distribution of
-libxml2 and libxslt <http://www.zlatkovic.com/libxml.en.html>`_.
-You need both libxml2 and libxslt, as well as iconv and zlib,
-which you can get from the same download site.  Further build
-instructions are in the `source build documentation <build.html>`_.
+to build from sources, rather than using a binary installer.  For
+that, lxml can use the `binary distribution of libxml2 and libxslt
+<http://www.zlatkovic.com/libxml.en.html>`_, which it downloads
+automatically during the static build.  It needs both libxml2 and
+libxslt, as well as iconv and zlib, which are available from the
+same download site.  Further build instructions are in the
+`source build documentation <build.html>`_.
 
 
 MacOS-X
@@ -163,20 +170,12 @@ A `macport <http://macports.org/>`_ of lxml is available.  Try
 something like ``port install py25-lxml``.
 
 If you want to use a more recent lxml release, you may have to build
-it yourself.  Apple doesn't help here, as MacOS-X is so badly maintained
-by them that the pre-installed system libraries of libxml2 and libxslt
-tend to be horribly outdated, and updating them is everything but easy.
-In any case, you cannot run lxml with the system provided libraries,
-so you have to use newer libraries.
+it yourself.  While the pre-installed system libraries of libxml2
+and libxslt are less outdated in recent MacOS-X versions than they
+used to be, so lxml should work them them out of the box, it is still
+recommended to use a static build with the most recent versions.
 
 Luckily, lxml's ``setup.py`` script has built-in support for building
 and integrating these libraries statically during the build.  Please
 read the
 `MacOS-X build instructions <build.html#building-lxml-on-macos-x>`_.
-
-A number of users also reported success with updated libraries (e.g.
-using `fink <http://finkproject.org/>`_ or macports), but needed to set
-the runtime environment variable ``DYLD_LIBRARY_PATH`` to the directory
-where fink keeps the libraries.  In any case, this method is easy to get
-wrong and everything but safe.  Unless you know what you are doing,
-follow the static build instructions above.

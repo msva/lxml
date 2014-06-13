@@ -37,24 +37,18 @@ lxml is extremely extensible through `XPath functions in Python`_, custom
    5   Error handling on exceptions
    6   Error logging
    7   Serialisation
+   8   Incremental XML generation
    8   CDATA
    9   XInclude and ElementInclude
    10  write_c14n on ElementTree
 
 ..
-  >>> try:
-  ...    from io import BytesIO
-  ...    def StringIO(s=None):
-  ...        if isinstance(s, str): s = s.encode("UTF-8")
-  ...        return BytesIO(s)
-  ... except ImportError:
-  ...    from StringIO import StringIO # Py2 <= 2.5
-  ...    BytesIO = StringIO
+  >>> from io import BytesIO
+  >>> def StringIO(s=None):
+  ...     if isinstance(s, str): s = s.encode("UTF-8")
+  ...     return BytesIO(s)
 
-  >>> try: from collections import deque
-  ... except ImportError:
-  ...    class deque(list):
-  ...        def popleft(self): return self.pop(0)
+  >>> from collections import deque
 
   >>> try: unicode = unicode
   ... except NameError: unicode = str
@@ -262,7 +256,7 @@ breadth-first traversal, it is almost as simple if you use the
 .. sourcecode:: pycon
 
     >>> root = etree.XML('<root><a><b/><c/></a><d><e/></d></root>')
-    >>> print(etree.tostring(root, pretty_print=True, encoding=unicode))
+    >>> print(etree.tostring(root, pretty_print=True, encoding='unicode'))
     <root>
       <a>
         <b/>
@@ -489,6 +483,14 @@ example::
   >>> print(f.getvalue().decode('utf-8'))
   <abc>text</abc>
 
+``xmlfile()`` accepts a file path as first argument, or a file(-like)
+object, as in the example above.  In the first case, it takes care to
+open and close the file itself, whereas file(-like) objects are not
+closed by default.  This is left to the code that opened them.  Since
+lxml 3.4, however, you can pass the argument ``close=True`` to make
+lxml call the object's ``.close()`` method when exiting the context
+manager.
+
 To insert pre-constructed Elements and subtrees, just pass them
 into ``write()``::
 
@@ -515,6 +517,34 @@ out into the XML file one after the other.  That way, they can be
 removed from memory right after their construction, which can largely
 reduce the memory footprint of an application, while keeping the
 overall XML generation easy, safe and correct.
+
+Together with Python coroutines, this can be used to generate XML
+in an asynchronous, non-blocking fashion, e.g. for a stream protocol
+like the instant messaging protocol
+`XMPP <https://en.wikipedia.org/wiki/Extensible_Messaging_and_Presence_Protocol>`_::
+
+    def writer(out_stream):
+        with xmlfile(out_stream) as xf:
+             with xf.element('{http://etherx.jabber.org/streams}stream'):
+                  try:
+                      while True:
+                          el = (yield)
+                          xf.write(el)
+                  except GeneratorExit:
+                      pass
+
+    w = writer(stream)
+    next(w)   # start writing (run up to 'yield')
+
+Then, whenever XML elements are available for writing, call
+
+::
+
+    w.send(element)
+
+And when done::
+
+    w.close()
 
 
 CDATA

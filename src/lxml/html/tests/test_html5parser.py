@@ -14,9 +14,36 @@ except ImportError:
     def skipUnless(condition, reason):
         return lambda f: condition and f or None
 
+if sys.version_info < (2,6):
+    class NamedTemporaryFile(object):
+        def __init__(self, delete=True, **kwargs):
+            self._tmpfile = tempfile.NamedTemporaryFile(**kwargs)
+        def close(self):
+            self._tmpfile.flush()
+        def __getattr__(self, name):
+            return getattr(self._tmpfile, name)
+else:
+    NamedTemporaryFile = tempfile.NamedTemporaryFile
+
 from lxml.builder import ElementMaker
 from lxml.etree import Element, ElementTree, ParserError
 from lxml.html import html_parser, XHTML_NAMESPACE
+
+try:
+    import urlparse
+except ImportError:
+    import urllib.parse as urlparse 
+    
+try:
+    from urllib import pathname2url
+except ImportError:
+    from urllib.request import pathname2url
+    
+
+def path2url(path):
+    return urlparse.urljoin(
+        'file:', pathname2url(path))
+
 
 try:
     import html5lib
@@ -55,6 +82,7 @@ except ImportError:
             },
         }))
 
+
 class Test_HTMLParser(unittest.TestCase):
     def make_one(self, **kwargs):
         from lxml.html.html5parser import HTMLParser
@@ -66,6 +94,7 @@ class Test_HTMLParser(unittest.TestCase):
         tree = parser.parse(XHTML_TEST_DOCUMENT)
         root = tree.getroot()
         self.assertEqual(root.tag, xhtml_tag('html'))
+
 
 class Test_XHTMLParser(unittest.TestCase):
     def make_one(self, **kwargs):
@@ -80,6 +109,7 @@ class Test_XHTMLParser(unittest.TestCase):
         tree = parser.parse(XHTML_TEST_DOCUMENT)
         root = tree.getroot()
         self.assertEqual(root.tag, xhtml_tag('html'))
+
 
 class Test_document_fromstring(unittest.TestCase):
     def call_it(self, *args, **kwargs):
@@ -106,6 +136,7 @@ class Test_document_fromstring(unittest.TestCase):
     def test_integration(self):
         elem = self.call_it(XHTML_TEST_DOCUMENT)
         self.assertEqual(elem.tag, xhtml_tag('html'))
+
 
 class Test_fragments_fromstring(unittest.TestCase):
     def call_it(self, *args, **kwargs):
@@ -186,6 +217,7 @@ class Test_fragment_fromstring(unittest.TestCase):
         parser = DummyParser(fragments=[DummyElement(tail='tail')])
         self.assertRaises(ParserError, self.call_it, 'html', parser=parser)
 
+
 class Test_fromstring(unittest.TestCase):
     def call_it(self, *args, **kwargs):
         from lxml.html.html5parser import fromstring
@@ -262,20 +294,24 @@ class Test_fromstring(unittest.TestCase):
         elem = self.call_it('<p></p>')
         self.assertEqual(elem.tag, xhtml_tag('p'))
 
+
 class Test_parse(unittest.TestCase):
     def call_it(self, *args, **kwargs):
         from lxml.html.html5parser import parse
         return parse(*args, **kwargs)
 
     def make_temp_file(self, contents=''):
-        tmpfile = tempfile.NamedTemporaryFile()
+        tmpfile = NamedTemporaryFile(delete=False)
         try:
             tmpfile.write(contents.encode('utf8'))
             tmpfile.flush()
             tmpfile.seek(0)
             return tmpfile
         except Exception:
-            tmpfile.close()
+            try:
+                tmpfile.close()
+            finally:
+                os.unlink(tempfile.name)
             raise
 
     def test_with_file_object(self):
@@ -291,34 +327,43 @@ class Test_parse(unittest.TestCase):
         parser = DummyParser(doc='the doc')
         tmpfile = self.make_temp_file('data')
         try:
+            data = tmpfile.read()
+        finally:
+            tmpfile.close()
+        try:
             self.assertEqual(self.call_it(tmpfile.name, parser=parser), 'the doc')
             fp, = parser.parse_args
             try:
-                self.assertEqual(fp.read(), tmpfile.read())
+                self.assertEqual(fp.read(), data)
             finally:
                 fp.close()
         finally:
-            tmpfile.close()
+            os.unlink(tmpfile.name)
 
     def test_with_url(self):
         parser = DummyParser(doc='the doc')
         tmpfile = self.make_temp_file('content')
         try:
-            url = 'file://' + tmpfile.name.replace(os.sep, '/')
+            data = tmpfile.read()
+        finally:
+            tmpfile.close()
+        try:
+            url = path2url(tmpfile.name)
             self.assertEqual(self.call_it(url, parser=parser), 'the doc')
             fp, = parser.parse_args
             try:
-                self.assertEqual(fp.read(), tmpfile.read())
+                self.assertEqual(fp.read(), data)
             finally:
                 fp.close()
         finally:
-            tmpfile.close()
+            os.unlink(tmpfile.name)
 
     @skipUnless(html5lib, 'html5lib is not installed')
     def test_integration(self):
         doc = self.call_it(StringIO(XHTML_TEST_DOCUMENT))
         root = doc.getroot()
         self.assertEqual(root.tag, xhtml_tag('html'))
+
 
 def test_suite():
     loader = unittest.TestLoader()
@@ -332,6 +377,7 @@ class HTMLElementMaker(ElementMaker):
             initargs.update(namespace=XHTML_NAMESPACE,
                             nsmap={None: XHTML_NAMESPACE})
         ElementMaker.__init__(self, **initargs)
+
 
 class DummyParser(object):
     def __init__(self, doc=None, root=None,
@@ -350,9 +396,11 @@ class DummyParser(object):
         self.parseFragment_kwargs = kwargs
         return self.fragments
 
+
 class DummyTreeBuilder(object):
     def __init__(self, namespaceHTMLElements=True):
         self.namespaceHTMLElements = namespaceHTMLElements
+
 
 class DummyElementTree(object):
     def __init__(self, root):
@@ -361,13 +409,16 @@ class DummyElementTree(object):
     def getroot(self):
         return self.root
 
+
 class DummyElement(object):
     def __init__(self, tag='tag', tail=None):
         self.tag = tag
         self.tail = tail
 
+
 def xhtml_tag(tag):
     return '{%s}%s' % (XHTML_NAMESPACE, tag)
+
 
 XHTML_TEST_DOCUMENT = '''
     <!DOCTYPE html>

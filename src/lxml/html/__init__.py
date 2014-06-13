@@ -96,8 +96,8 @@ _forms_xpath = etree.XPath("descendant-or-self::form|descendant-or-self::x:form"
 _class_xpath = etree.XPath("descendant-or-self::*[@class and contains(concat(' ', normalize-space(@class), ' '), concat(' ', $class_name, ' '))]")
 _id_xpath = etree.XPath("descendant-or-self::*[@id=$id]")
 _collect_string_content = etree.XPath("string()")
-_css_url_re = re.compile(r'url\(('+'["][^"]*["]|'+"['][^']*[']|"+r'[^)]*)\)', re.I)
-_css_import_re = re.compile(r'@import "(.*?)"')
+_iter_css_urls = re.compile(r'url\(('+'["][^"]*["]|'+"['][^']*[']|"+r'[^)]*)\)', re.I).finditer
+_iter_css_imports = re.compile(r'@import "(.*?)"').finditer
 _label_xpath = etree.XPath("//label[@for=$id]|//x:label[@for=$id]",
                            namespaces={'x':XHTML_NAMESPACE})
 _archive_re = re.compile(r'[^ ]+')
@@ -114,7 +114,7 @@ def _transform_result(typ, result):
     if issubclass(typ, bytes):
         return tostring(result, encoding='utf-8')
     elif issubclass(typ, unicode):
-        return tostring(result, encoding=unicode)
+        return tostring(result, encoding='unicode')
     else:
         return result
 
@@ -213,7 +213,7 @@ class HtmlMixin(object):
 
             >>> h = fragment_fromstring('<div>Hello <b>World!</b></div>')
             >>> h.find('.//b').drop_tag()
-            >>> print(tostring(h, encoding=unicode))
+            >>> print(tostring(h, encoding='unicode'))
             <div>Hello World!</div>
         """
         parent = self.getparent()
@@ -378,7 +378,7 @@ class HtmlMixin(object):
         links reported later on.
         """
         link_attrs = defs.link_attrs
-        for el in self.iter():
+        for el in self.iter(etree.Element):
             attribs = el.attrib
             tag = _nons(el.tag)
             if tag != 'object':
@@ -416,23 +416,22 @@ class HtmlMixin(object):
                     yield (el, 'value', el.get('value'), 0)
             if tag == 'style' and el.text:
                 urls = [
-                    _unquote_match(match.group(1), match.start(1))
-                    for match in _css_url_re.finditer(el.text)
+                    # (start_pos, url)
+                    _unquote_match(match.group(1), match.start(1))[::-1]
+                    for match in _iter_css_urls(el.text)
                     ] + [
-                    (match.group(1), match.start(1))
-                    for match in _css_import_re.finditer(el.text)
+                    (match.start(1), match.group(1))
+                    for match in _iter_css_imports(el.text)
                     ]
                 if urls:
                     # sort by start pos to bring both match sets back into order
-                    urls = [ (start, url) for (url, start) in urls ]
-                    urls.sort()
-                    # reverse the list to report correct positions despite
+                    # and reverse the list to report correct positions despite
                     # modifications
-                    urls.reverse()
+                    urls.sort(reverse=True)
                     for start, url in urls:
                         yield (el, None, url, start)
             if 'style' in attribs:
-                urls = list(_css_url_re.finditer(attribs['style']))
+                urls = list(_iter_css_urls(attribs['style']))
                 if urls:
                     # return in reversed order to simplify in-place modifications
                     for match in urls[::-1]:
@@ -620,7 +619,9 @@ def fragments_fromstring(html, no_leading_text=False, base_url=None,
     # FIXME: check what happens when you give html with a body, head, etc.
     if isinstance(html, bytes):
         if not _looks_like_full_html_bytes(html):
-            html = '<html><body>%s</body></html>'.encode('ascii') % html
+            # can't use %-formatting in early Py3 versions
+            html = ('<html><body>'.encode('ascii') + html +
+                    '</body></html>'.encode('ascii'))
     else:
         if not _looks_like_full_html_unicode(html):
             html = '<html><body>%s</body></html>' % html
@@ -769,7 +770,7 @@ def parse(filename_or_url, parser=None, base_url=None, **kw):
 def _contains_block_level_tag(el):
     # FIXME: I could do this with XPath, but would that just be
     # unnecessarily slow?
-    for el in el.iter():
+    for el in el.iter(etree.Element):
         if _nons(el.tag) in defs.block_tags:
             return True
     return False
@@ -1086,7 +1087,8 @@ class TextareaElement(InputMixin, HtmlElement):
             serialisation_method = 'html'
         for el in self:
             # it's rare that we actually get here, so let's not use ''.join()
-            content += etree.tostring(el, method=serialisation_method, encoding=unicode)
+            content += etree.tostring(
+                el, method=serialisation_method, encoding='unicode')
         return content
     def _value__set(self, value):
         del self[:]
@@ -1527,11 +1529,10 @@ def html_to_xhtml(html):
     except AttributeError:
         pass
     prefix = "{%s}" % XHTML_NAMESPACE
-    for el in html.iter():
+    for el in html.iter(etree.Element):
         tag = el.tag
-        if isinstance(tag, basestring):
-            if tag[0] != '{':
-                el.tag = prefix + tag
+        if tag[0] != '{':
+            el.tag = prefix + tag
 
 def xhtml_to_html(xhtml):
     """Convert all tags in an XHTML tree to HTML by removing their
@@ -1565,7 +1566,7 @@ def tostring(doc, pretty_print=False, include_meta_content_type=False,
     The ``encoding`` argument controls the output encoding (defauts to
     ASCII, with &#...; character references for any characters outside
     of ASCII).  Note that you can pass the name ``'unicode'`` as
-    ``encoding`` argument to serialise to a unicode string.
+    ``encoding`` argument to serialise to a Unicode string.
 
     The ``method`` argument defines the output method.  It defaults to
     'html', but can also be 'xml' for xhtml output, or 'text' to
@@ -1596,21 +1597,21 @@ def tostring(doc, pretty_print=False, include_meta_content_type=False,
         >>> html.tostring(root, method='text')
         b'Helloworld!'
 
-        >>> html.tostring(root, method='text', encoding=unicode)
+        >>> html.tostring(root, method='text', encoding='unicode')
         u'Helloworld!'
 
         >>> root = html.fragment_fromstring('<div><p>Hello<br>world!</p>TAIL</div>')
-        >>> html.tostring(root[0], method='text', encoding=unicode)
+        >>> html.tostring(root[0], method='text', encoding='unicode')
         u'Helloworld!TAIL'
 
-        >>> html.tostring(root[0], method='text', encoding=unicode, with_tail=False)
+        >>> html.tostring(root[0], method='text', encoding='unicode', with_tail=False)
         u'Helloworld!'
 
         >>> doc = html.document_fromstring('<p>Hello<br>world!</p>')
-        >>> html.tostring(doc, method='html', encoding=unicode)
+        >>> html.tostring(doc, method='html', encoding='unicode')
         u'<html><body><p>Hello<br>world!</p></body></html>'
 
-        >>> print(html.tostring(doc, method='html', encoding=unicode,
+        >>> print(html.tostring(doc, method='html', encoding='unicode',
         ...          doctype='<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN"'
         ...                  ' "http://www.w3.org/TR/html4/strict.dtd">'))
         <!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd">

@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
-import unittest, doctest, sys, os.path
+import unittest
+import sys
+import os.path
 
 this_dir = os.path.dirname(__file__)
 if this_dir not in sys.path:
-    sys.path.insert(0, this_dir) # needed for Py3
+    sys.path.insert(0, this_dir)  # needed for Py3
 
 from common_imports import StringIO, etree, SillyFileLike, HelperTestCase
 from common_imports import _str, _bytes
@@ -23,6 +25,7 @@ uni = _bytes('\\xc3\\u0680\\u3120').decode("unicode_escape") # some non-ASCII ch
 
 uxml = _bytes("<test><title>test \\xc3\\xa1\\u3120</title><h1>page \\xc3\\xa1\\u3120 title</h1></test>"
               ).decode("unicode_escape")
+
 
 class UnicodeTestCase(HelperTestCase):
     def test_unicode_xml(self):
@@ -93,7 +96,20 @@ class UnicodeTestCase(HelperTestCase):
 ##         self.assertEqual(unicode(etree.tostring(root, 'UTF-8'), 'UTF-8'),
 ##                           uxml)
 
+
+class EncodingsTestCase(HelperTestCase):
+    def test_illegal_utf8(self):
+        data = _bytes('<test>\x80\x80\x80</test>', encoding='iso8859-1')
+        self.assertRaises(etree.XMLSyntaxError, etree.fromstring, data)
+
+    def test_illegal_utf8_recover(self):
+        data = _bytes('<test>\x80\x80\x80</test>', encoding='iso8859-1')
+        parser = etree.XMLParser(recover=True)
+        self.assertRaises(etree.XMLSyntaxError, etree.fromstring, data, parser)
+
+
 def test_suite():
     suite = unittest.TestSuite()
     suite.addTests([unittest.makeSuite(UnicodeTestCase)])
+    suite.addTests([unittest.makeSuite(EncodingsTestCase)])
     return suite

@@ -48,12 +48,12 @@ ElementTree_.
    6  Parsing and Serialisation
      6.1  Why doesn't the ``pretty_print`` option reformat my XML output?
      6.2  Why can't lxml parse my XML from unicode strings?
-     6.3  What is the difference between str(xslt(doc)) and xslt(doc).write() ?
-     6.4  Why can't I just delete parents or clear the root node in iterparse()?
-     6.5  How do I output null characters in XML text?
-     6.6  Is lxml vulnerable to XML bombs?
-     6.7  How do I configure lxml safely as a web-service endpoint?
-     6.8  Can lxml parse from file objects opened in unicode mode?
+     6.3  Can lxml parse from file objects opened in unicode mode?
+     6.4  What is the difference between str(xslt(doc)) and xslt(doc).write() ?
+     6.5  Why can't I just delete parents or clear the root node in iterparse()?
+     6.6  How do I output null characters in XML text?
+     6.7  Is lxml vulnerable to XML bombs?
+     6.8  How do I configure lxml safely as a web-service endpoint?
    7  XPath and Document Traversal
      7.1  What are the ``findall()`` and ``xpath()`` methods on Element(Tree)?
      7.2  Why doesn't ``findall()`` support full XPath expressions?
@@ -168,6 +168,12 @@ is definitely very close to compliance.  Schematron is supported in
 two ways, the best being the original ISO Schematron reference
 implementation via XSLT.  libxml2 also supports loading documents
 through HTTP and FTP.
+
+For `RelaxNG Compact Syntax <http://relaxng.org/compact-tutorial-20030326.html>`_
+support, there is a tool called `rnc2rng <http://www.gnosis.cx/download/relax/>`_,
+written by David Mertz, which you might be able to use from Python.  Failing
+that, `trang <http://code.google.com/p/jing-trang/>`_ is the 'official'
+command line tool (written in Java) to do the conversion.
 
 
 Who uses lxml?
@@ -856,13 +862,26 @@ lxml can add fresh whitespace to the XML tree to indent it.
 Note that the ``remove_blank_text`` option also uses a heuristic if it
 has no definite knowledge about the document's ignorable whitespace.
 It will keep blank text nodes that appear after non-blank text nodes
-at the same level.  This is to prevent document-style XML from
-breaking.
+at the same level.  This is to prevent document-style XML from loosing
+content.
 
-If you want to be sure all blank text is removed, you have to use
-either a DTD to tell the parser which whitespace it can safely ignore,
-or remove the ignorable whitespace manually after parsing, e.g. by
-setting all tail text to None:
+The HTMLParser has this structural knowledge built-in, which means that
+most whitespace that appears between tags in HTML documents will *not*
+be removed by this option, except in places where it is truly ignorable,
+e.g. in the page header, between table structure tags, etc.  Therefore,
+it is also safe to use this option with the HTMLParser, as it will keep
+content like the following intact (i.e. it will not remove the space
+that separates the two words):
+
+.. sourcecode:: html
+
+   <p><b>some</b> <em>text</em></p>
+
+If you want to be sure all blank text is removed from an XML document
+(or just more blank text than the parser does by itself), you have to
+use either a DTD to tell the parser which whitespace it can safely
+ignore, or remove the ignorable whitespace manually after parsing,
+e.g. by setting all tail text to None:
 
 .. sourcecode:: python
 
@@ -913,6 +932,30 @@ broken.  lxml will not parse them.  You must provide parsable data in a
 valid encoding.
 
 .. _`XML specification`: http://www.w3.org/TR/REC-xml/
+
+
+Can lxml parse from file objects opened in unicode/text mode?
+-------------------------------------------------------------
+
+Technically, yes. However, you likely do not want to do that, because
+it is extremely inefficient. The text encoding that libxml2 uses
+internally is UTF-8, so parsing from a Unicode file means that Python
+first reads a chunk of data from the file, then decodes it into a new
+buffer, and then copies it into a new unicode string object, just to
+let libxml2 make yet another copy while encoding it down into UTF-8
+in order to parse it. It's clear that this involves a lot more
+recoding and copying than when parsing straight from the bytes that
+the file contains.
+
+If you really know the encoding better than the parser (e.g. when
+parsing HTML that lacks a content declaration), then instead of passing
+an encoding parameter into the file object when opening it, create a
+new instance of an XMLParser or HTMLParser and pass the encoding into
+its constructor.  Afterwards, use that parser for parsing, e.g. by
+passing it into the ``etree.parse(file, parser)`` function.  Remember
+to open the file in binary mode (mode="rb"), or, if possible, prefer
+passing the file path directly into ``parse()`` instead of an opened
+Python file object.
 
 
 What is the difference between str(xslt(doc)) and xslt(doc).write() ?
@@ -1042,27 +1085,6 @@ The defusedxml_ package comes with an example setup and a wrapper
 API for lxml that applies certain counter measures internally.
 
 .. _defusedxml: https://bitbucket.org/tiran/defusedxml
-
-
-Can lxml parse from file objects opened in unicode/text mode?
--------------------------------------------------------------
-
-Technically, yes. However, you likely do not want to do that, because
-it is extremely inefficient. The text encoding that libxml2 uses
-internally is UTF-8, so parsing from a Unicode file means that Python
-first reads a chunk of data from the file, then decodes it into a new
-buffer, and then copies it into a new unicode string object, just to
-let libxml2 make yet another copy while encoding it down into UTF-8
-in order to parse it. It's clear that this involves a lot more
-recoding and copying than when parsing straight from the bytes that
-the file contains.
-
-If you really know the encoding better than the parser (e.g. when
-parsing HTML that lacks a content declaration), then instead of passing
-an encoding parameter into the file object when opening it, create a
-new instance of an XMLParser or HTMLParser and pass the encoding into
-its constructor. Afterwards, use that parser for parsing, e.g. by
-passing it into the ``etree.parse(file, parser)`` function.
 
 
 XPath and Document Traversal

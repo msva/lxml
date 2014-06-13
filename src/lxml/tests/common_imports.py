@@ -5,6 +5,16 @@ import gc
 import sys
 import unittest
 
+try:
+    import urlparse
+except ImportError:
+    import urllib.parse as urlparse 
+
+try:
+    from urllib import pathname2url
+except:
+    from urllib.request import pathname2url
+
 from lxml import etree
 
 def make_version_tuple(version_string):
@@ -104,6 +114,8 @@ def _get_caller_relative_path(filename, frame_depth=2):
     return os.path.normpath(os.path.join(
             os.path.dirname(getattr(module, '__file__', '')), filename))
 
+from io import StringIO
+
 if sys.version_info[0] >= 3:
     # Python 3
     from builtins import str as unicode
@@ -111,7 +123,7 @@ if sys.version_info[0] >= 3:
         return s
     def _bytes(s, encoding="UTF-8"):
         return s.encode(encoding)
-    from io import StringIO, BytesIO as _BytesIO
+    from io import BytesIO as _BytesIO
     def BytesIO(*args):
         if args and isinstance(args[0], str):
             args = (args[0].encode("UTF-8"),)
@@ -135,8 +147,7 @@ else:
         return unicode(s, encoding=encoding)
     def _bytes(s, encoding="UTF-8"):
         return s
-    from StringIO import StringIO
-    BytesIO = StringIO
+    from io import BytesIO
 
     doctest_parser = doctest.DocTestParser()
     _fix_traceback = re.compile(r'^(\s*)(?:\w+\.)+(\w*(?:Error|Exception|Invalid):)', re.M).sub
@@ -162,12 +173,13 @@ except AttributeError:
             return _skip
         return _keep
 
+
 class HelperTestCase(unittest.TestCase):
     def tearDown(self):
         gc.collect()
 
     def parse(self, text, parser=None):
-        f = BytesIO(text)
+        f = BytesIO(text) if isinstance(text, bytes) else StringIO(text)
         return etree.parse(f, parser=parser)
     
     def _rootstring(self, tree):
@@ -179,7 +191,8 @@ class HelperTestCase(unittest.TestCase):
         unittest.TestCase.assertFalse
     except AttributeError:
         assertFalse = unittest.TestCase.failIf
-        
+
+
 class SillyFileLike:
     def __init__(self, xml_data=_bytes('<foo><bar/></foo>')):
         self.xml_data = xml_data
@@ -256,8 +269,12 @@ def fileInTestDir(name):
     _testdir = os.path.dirname(__file__)
     return os.path.join(_testdir, name)
 
+def path2url(path):
+    return urlparse.urljoin(
+        'file:', pathname2url(path))
+
 def fileUrlInTestDir(name):
-    return 'file://' + fileInTestDir(name).replace(os.sep, '/')
+    return path2url(fileInTestDir(name))
 
 def read_file(name, mode='r'):
     f = open(name, mode)
@@ -278,7 +295,7 @@ def readFileInTestDir(name, mode='r'):
     return read_file(fileInTestDir(name), mode)
 
 def canonicalize(xml):
-    tree = etree.parse(BytesIO(xml))
+    tree = etree.parse(BytesIO(xml) if isinstance(xml, bytes) else StringIO(xml))
     f = BytesIO()
     tree.write_c14n(f)
     return f.getvalue()

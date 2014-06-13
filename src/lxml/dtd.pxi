@@ -297,15 +297,21 @@ cdef class DTD(_Validator):
 
     property name:
        def __get__(self):
-          return funicode(self._c_dtd.name) if (self._c_dtd is not NULL and self._c_dtd.name is not NULL) else None
+           if self._c_dtd is NULL:
+               return None
+           return funicodeOrNone(self._c_dtd.name)
 
     property external_id:
        def __get__(self):
-          return funicode(self._c_dtd.ExternalID) if (self._c_dtd is not NULL and self._c_dtd.ExternalID is not NULL) else None
+           if self._c_dtd is NULL:
+               return None
+           return funicodeOrNone(self._c_dtd.ExternalID)
 
     property system_url:
        def __get__(self):
-          return funicode(self._c_dtd.SystemID) if (self._c_dtd is not NULL and self._c_dtd.SystemID is not NULL) else None
+           if self._c_dtd is NULL:
+               return None
+           return funicodeOrNone(self._c_dtd.SystemID)
 
     def iterelements(self):
         cdef tree.xmlNode *c_node = self._c_dtd.children if self._c_dtd is not NULL else NULL
@@ -357,6 +363,11 @@ cdef class DTD(_Validator):
         if valid_ctxt is NULL:
             raise DTDError(u"Failed to create validation context")
 
+        # work around error reporting bug in libxml2 <= 2.9.1 (and later?)
+        # https://bugzilla.gnome.org/show_bug.cgi?id=724903
+        valid_ctxt.error = <dtdvalid.xmlValidityErrorFunc>_nullGenericErrorFunc
+        valid_ctxt.userData = NULL
+
         try:
             with self._error_log:
                 c_doc = _fakeRootDoc(doc._c_doc, root_node._c_node)
@@ -368,10 +379,7 @@ cdef class DTD(_Validator):
         if ret == -1:
             raise DTDValidateError(u"Internal error in DTD validation",
                                    self._error_log)
-        if ret == 1:
-            return True
-        else:
-            return False
+        return ret == 1
 
 
 cdef tree.xmlDtd* _parseDtdFromFilelike(file) except NULL:

@@ -1386,7 +1386,7 @@ cdef bytes _utf8(object s):
     elif isinstance(s, unicode):
         utf8_string = (<unicode>s).encode('utf8')
         invalid = check_string_utf8(utf8_string) == -1 # non-XML?
-    elif isinstance(s, bytes):
+    elif isinstance(s, (bytes, bytearray)):
         utf8_string = bytes(s)
         invalid = check_string_utf8(utf8_string)
     else:
@@ -1407,15 +1407,13 @@ cdef bint _isFilePath(const_xmlChar* c_path):
         return 1
 
     # test if it looks like an absolute Windows path or URL
-    if (c_path[0] >= c'a' and c_path[0] <= c'z') or \
-            (c_path[0] >= c'A' and c_path[0] <= c'Z'):
+    if c'a' <= c_path[0] <= c'z' or c'A' <= c_path[0] <= c'Z':
         c_path += 1
         if c_path[0] == c':' and c_path[1] in b'\0\\':
             return 1  # C: or C:\...
 
         # test if it looks like a URL with scheme://
-        while (c_path[0] >= c'a' and c_path[0] <= c'z') or \
-                (c_path[0] >= c'A' and c_path[0] <= c'Z'):
+        while c'a' <= c_path[0] <= c'z' or c'A' <= c_path[0] <= c'Z':
             c_path += 1
         if c_path[0] == c':' and c_path[1] == c'/' and c_path[2] == c'/':
             return 0
@@ -1608,7 +1606,7 @@ cdef inline object _namespacedName(xmlNode* c_node):
 cdef object _namespacedNameFromNsName(const_xmlChar* href, const_xmlChar* name):
     if href is NULL:
         return funicode(name)
-    elif python.LXML_UNICODE_STRINGS and python.PY_VERSION_HEX >= 0x02060000:
+    elif python.LXML_UNICODE_STRINGS and not python.IS_PYPY:
         return python.PyUnicode_FromFormat("{%s}%s", href, name)
     else:
         s = python.PyBytes_FromFormat("{%s}%s", href, name)

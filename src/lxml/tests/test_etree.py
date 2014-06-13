@@ -15,6 +15,7 @@ import re
 import gc
 import operator
 import tempfile
+import textwrap
 import zlib
 import gzip
 
@@ -22,7 +23,8 @@ this_dir = os.path.dirname(__file__)
 if this_dir not in sys.path:
     sys.path.insert(0, this_dir) # needed for Py3
 
-from common_imports import etree, StringIO, BytesIO, HelperTestCase, fileInTestDir, read_file
+from common_imports import etree, StringIO, BytesIO, HelperTestCase
+from common_imports import fileInTestDir, fileUrlInTestDir, read_file, path2url
 from common_imports import SillyFileLike, LargeFileLikeUnicode, doctest, make_doctest
 from common_imports import canonicalize, sorted, _str, _bytes, skipIf, IS_PYPY
 
@@ -865,6 +867,31 @@ class ETreeOnlyTestCase(HelperTestCase):
         # FIXME: would be nice to get some errors logged ...
         #self.assertTrue(len(parser.error_log) > 0, "error log is empty")
 
+    def test_feed_parser_recover_no_id_dict(self):
+        # test that recover mode plays nicely with the no-id-dict setup
+        parser = self.etree.XMLParser(recover=True, collect_ids=False)
+
+        parser.feed('<?xml version=')
+        parser.feed('"1.0"?><ro')
+        parser.feed('ot xml:id="123"><')
+        parser.feed('a test="works" xml:id=')
+        parser.feed('"321"><othertag/></root') # <a> not closed!
+        parser.feed('>')
+
+        root = parser.close()
+
+        self.assertEqual(root.tag, "root")
+        self.assertEqual(len(root), 1)
+        self.assertEqual(root[0].tag, "a")
+        self.assertEqual(root[0].get("test"), "works")
+        self.assertEqual(root[0].attrib, {
+            'test': 'works',
+            '{http://www.w3.org/XML/1998/namespace}id': '321'})
+        self.assertEqual(len(root[0]), 1)
+        self.assertEqual(root[0][0].tag, "othertag")
+        # FIXME: would be nice to get some errors logged ...
+        #self.assertTrue(len(parser.error_log) > 0, "error log is empty")
+
     def test_elementtree_parser_target_type_error(self):
         assertEqual = self.assertEqual
         assertFalse  = self.assertFalse
@@ -943,8 +970,34 @@ class ETreeOnlyTestCase(HelperTestCase):
             done = 'value error received as expected'
 
         self.assertEqual(["start-root", "data-A", "start-a",
-                           "data-ca", "end-a", "close"],
-                          events)
+                          "data-ca", "end-a", "close"],
+                         events)
+
+    def test_parser_target_feed_no_id_dict(self):
+        # test that target parsing works nicely with the no-id-hash setup
+        events = []
+        class Target(object):
+            def start(self, tag, attrib):
+                events.append("start-" + tag)
+            def end(self, tag):
+                events.append("end-" + tag)
+            def data(self, data):
+                events.append("data-" + data)
+            def comment(self, text):
+                events.append("comment-" + text)
+            def close(self):
+                return "DONE"
+
+        parser = self.etree.XMLParser(target=Target(), collect_ids=False)
+
+        parser.feed(_bytes('<!--a--><root xml:id="123">A<!--b-->'))
+        parser.feed(_bytes('<sub xml:id="321"/>B</root>'))
+        done = parser.close()
+
+        self.assertEqual("DONE", done)
+        self.assertEqual(["comment-a", "start-root", "data-A", "comment-b",
+                          "start-sub", "end-sub", "data-B", "end-root"],
+                         events)
 
     def test_parser_target_comment(self):
         events = []
@@ -1232,15 +1285,15 @@ class ETreeOnlyTestCase(HelperTestCase):
 
         class MyResolver(self.etree.Resolver):
             def resolve(self, url, id, context):
-                assertEqual(url, fileInTestDir(test_url))
+                assertEqual(url, fileUrlInTestDir(test_url))
                 return self.resolve_filename(
-                    fileInTestDir('test.dtd'), context)
+                    fileUrlInTestDir('test.dtd'), context)
 
         parser.resolvers.add(MyResolver())
 
         xml = _str('<!DOCTYPE a SYSTEM "%s"><a><b/></a>') % test_url
         tree = parse(StringIO(xml), parser,
-                     base_url=fileInTestDir('__test.xml'))
+                     base_url=fileUrlInTestDir('__test.xml'))
         root = tree.getroot()
         self.assertEqual(
             root.attrib,    {'default': 'valueA'})
@@ -1699,7 +1752,34 @@ class ETreeOnlyTestCase(HelperTestCase):
         self.assertRaises(TypeError, c.insert, 0, el)
         self.assertRaises(TypeError, c.set, "myattr", "test")
 
-    # test passing 'None' to dump
+    def test_comment_immutable_attrib(self):
+        c = self.etree.Comment()
+        self.assertEqual(0, len(c.attrib))
+
+        self.assertFalse(c.attrib.__contains__('nope'))
+        self.assertFalse('nope' in c.attrib)
+        self.assertFalse('nope' in c.attrib.keys())
+        self.assertFalse('nope' in c.attrib.values())
+        self.assertFalse(('nope', 'huhu') in c.attrib.items())
+
+        self.assertEqual([], list(c.attrib))
+        self.assertEqual([], list(c.attrib.keys()))
+        self.assertEqual([], list(c.attrib.items()))
+        self.assertEqual([], list(c.attrib.values()))
+        self.assertEqual([], list(c.attrib.iterkeys()))
+        self.assertEqual([], list(c.attrib.iteritems()))
+        self.assertEqual([], list(c.attrib.itervalues()))
+
+        self.assertEqual('HUHU', c.attrib.pop('nope', 'HUHU'))
+        self.assertRaises(KeyError, c.attrib.pop, 'nope')
+
+        self.assertRaises(KeyError, c.attrib.__getitem__, 'only')
+        self.assertRaises(KeyError, c.attrib.__getitem__, 'names')
+        self.assertRaises(KeyError, c.attrib.__getitem__, 'nope')
+        self.assertRaises(KeyError, c.attrib.__setitem__, 'nope', 'yep')
+        self.assertRaises(KeyError, c.attrib.__delitem__, 'nope')
+
+    # test passing 'None' to dump()
     def test_dump_none(self):
         self.assertRaises(TypeError, self.etree.dump, None)
 
@@ -2204,6 +2284,34 @@ class ETreeOnlyTestCase(HelperTestCase):
         expected = {}
         self._checkIDDict(dic, expected)
 
+    def test_XMLDTDID_no_id_dict(self):
+        XMLDTDID = self.etree.XMLDTDID
+        XML      = self.etree.XML
+        xml_text = _bytes('''
+        <!DOCTYPE document [
+        <!ELEMENT document (h1,p)*>
+        <!ELEMENT h1 (#PCDATA)>
+        <!ATTLIST h1 myid ID #REQUIRED>
+        <!ELEMENT p  (#PCDATA)>
+        <!ATTLIST p  someid ID #REQUIRED>
+        ]>
+        <document>
+          <h1 myid="chapter1">...</h1>
+          <p id="note1" class="note">...</p>
+          <p>Regular paragraph.</p>
+          <p xml:id="xmlid">XML:ID paragraph.</p>
+          <p someid="warn1" class="warning">...</p>
+        </document>
+        ''')
+
+        parser = etree.XMLParser(collect_ids=False)
+        root, dic = XMLDTDID(xml_text, parser=parser)
+        root2 = XML(xml_text)
+        self.assertEqual(self._writeElement(root),
+                         self._writeElement(root2))
+        self.assertFalse(dic)
+        self._checkIDDict(dic, {})
+
     def _checkIDDict(self, dic, expected):
         self.assertEqual(len(dic),
                           len(expected))
@@ -2633,6 +2741,69 @@ class ETreeOnlyTestCase(HelperTestCase):
             [a, b, c],
             list(a.getiterator('*')))
 
+    def test_elementtree_getelementpath(self):
+        a  = etree.Element("a")
+        b  = etree.SubElement(a, "b")
+        c  = etree.SubElement(a, "c")
+        d1 = etree.SubElement(c, "d")
+        d2 = etree.SubElement(c, "d")
+        c.text = d1.text = 'TEXT'
+
+        tree = etree.ElementTree(a)
+        self.assertEqual('.', tree.getelementpath(a))
+        self.assertEqual('c/d[1]', tree.getelementpath(d1))
+        self.assertEqual('c/d[2]', tree.getelementpath(d2))
+
+        self.assertEqual(d1, tree.find(tree.getelementpath(d1)))
+        self.assertEqual(d2, tree.find(tree.getelementpath(d2)))
+
+        tree = etree.ElementTree(c)
+        self.assertEqual('.', tree.getelementpath(c))
+        self.assertEqual('d[2]', tree.getelementpath(d2))
+        self.assertEqual(d2, tree.find(tree.getelementpath(d2)))
+
+        tree = etree.ElementTree(b)  # not a parent of a/c/d1/d2
+        self.assertEqual('.', tree.getelementpath(b))
+        self.assertRaises(ValueError, tree.getelementpath, a)
+        self.assertRaises(ValueError, tree.getelementpath, c)
+        self.assertRaises(ValueError, tree.getelementpath, d2)
+
+    def test_elementtree_getelementpath_ns(self):
+        a  = etree.Element("{http://ns1/}a")
+        b  = etree.SubElement(a, "{http://ns1/}b")
+        c  = etree.SubElement(a, "{http://ns1/}c")
+        d1 = etree.SubElement(c, "{http://ns1/}d")
+        d2 = etree.SubElement(c, "{http://ns2/}d")
+        d3 = etree.SubElement(c, "{http://ns1/}d")
+
+        tree = etree.ElementTree(a)
+        self.assertEqual('.', tree.getelementpath(a))
+        self.assertEqual('{http://ns1/}c/{http://ns1/}d[1]',
+                         tree.getelementpath(d1))
+        self.assertEqual('{http://ns1/}c/{http://ns2/}d',
+                         tree.getelementpath(d2))
+        self.assertEqual('{http://ns1/}c/{http://ns1/}d[2]',
+                         tree.getelementpath(d3))
+
+        self.assertEqual(a, tree.find(tree.getelementpath(a)))
+        self.assertEqual(b, tree.find(tree.getelementpath(b)))
+        self.assertEqual(c, tree.find(tree.getelementpath(c)))
+        self.assertEqual(d1, tree.find(tree.getelementpath(d1)))
+        self.assertEqual(d2, tree.find(tree.getelementpath(d2)))
+        self.assertEqual(d3, tree.find(tree.getelementpath(d3)))
+
+        tree = etree.ElementTree(c)
+        self.assertEqual('{http://ns1/}d[1]', tree.getelementpath(d1))
+        self.assertEqual('{http://ns2/}d', tree.getelementpath(d2))
+        self.assertEqual('{http://ns1/}d[2]', tree.getelementpath(d3))
+        self.assertEqual(d1, tree.find(tree.getelementpath(d1)))
+        self.assertEqual(d2, tree.find(tree.getelementpath(d2)))
+        self.assertEqual(d3, tree.find(tree.getelementpath(d3)))
+
+        tree = etree.ElementTree(b)  # not a parent of d1/d2
+        self.assertRaises(ValueError, tree.getelementpath, d1)
+        self.assertRaises(ValueError, tree.getelementpath, d2)
+
     def test_elementtree_find_qname(self):
         XML = self.etree.XML
         ElementTree = self.etree.ElementTree
@@ -2887,6 +3058,22 @@ class ETreeOnlyTestCase(HelperTestCase):
         self.assertEqual(
             [2, 2, 4],
             [ el.sourceline for el in root.getiterator() ])
+
+    def test_large_sourceline_XML(self):
+        XML = self.etree.XML
+        root = XML(_bytes(
+            '<?xml version="1.0"?>\n'
+            '<root>' + '\n' * 65536 +
+            '<p>' + '\n' * 65536 + '</p>\n' +
+            '<br/>\n'
+            '</root>'))
+
+        if self.etree.LIBXML_VERSION >= (2, 9):
+            expected = [2, 131074, 131076]
+        else:
+            expected = [2, 65535, 65535]
+
+        self.assertEqual(expected, [el.sourceline for el in root.iter()])
 
     def test_sourceline_parse(self):
         parse = self.etree.parse
@@ -3219,6 +3406,29 @@ class ETreeOnlyTestCase(HelperTestCase):
         result = tostring(a, with_tail=True)
         self.assertEqual(result, _bytes("<a><b/>bTAIL<c/></a>aTAIL"))
 
+    def test_tostring_method_html_with_tail(self):
+        tostring = self.etree.tostring
+        html = self.etree.fromstring(
+            '<html><body>'
+            '<div><p>Some text<i>\r\n</i></p></div>\r\n'
+            '</body></html>',
+            parser=self.etree.HTMLParser())
+        self.assertEqual(html.tag, 'html')
+        div = html.find('.//div')
+        self.assertEqual(div.tail, '\r\n')
+        result = tostring(div, method='html')
+        self.assertEqual(
+            result,
+            _bytes("<div><p>Some text<i>\r\n</i></p></div>\r\n"))
+        result = tostring(div, method='html', with_tail=True)
+        self.assertEqual(
+            result,
+            _bytes("<div><p>Some text<i>\r\n</i></p></div>\r\n"))
+        result = tostring(div, method='html', with_tail=False)
+        self.assertEqual(
+            result,
+            _bytes("<div><p>Some text<i>\r\n</i></p></div>"))
+
     def test_standalone(self):
         tostring = self.etree.tostring
         XML = self.etree.XML
@@ -3513,7 +3723,7 @@ class _XIncludeTestCase(HelperTestCase):
         <doc xmlns:xi="http://www.w3.org/2001/XInclude">
           <xi:include href="%s" parse="text"/>
         </doc>
-        ''' % filename))
+        ''' % path2url(filename)))
         old_text = root.text
         content = read_file(filename)
         old_tail = root[0].tail
@@ -3564,6 +3774,51 @@ class _XIncludeTestCase(HelperTestCase):
         self.assertEqual(
             [("dtd", True), ("include", True), ("input", True)],
             called)
+
+    def test_xinclude_resolver_recursive(self):
+        data = textwrap.dedent('''
+        <doc xmlns:xi="http://www.w3.org/2001/XInclude">
+        <foo/>
+        <xi:include href="./test.xml" />
+        </doc>
+        ''')
+
+        class Resolver(etree.Resolver):
+            called = {}
+
+            def resolve(self, url, id, context):
+                if url.endswith("test_xinclude.xml"):
+                    assert not self.called.get("input")
+                    self.called["input"] = True
+                    return None  # delegate to default resolver
+                elif url.endswith('/test5.xml'):
+                    assert not self.called.get("DONE")
+                    self.called["DONE"] = True
+                    return self.resolve_string('<DONE/>', context)
+                else:
+                    _, filename = url.rsplit('/', 1)
+                    assert not self.called.get(filename)
+                    self.called[filename] = True
+                    next_data = data.replace(
+                        'test.xml', 'test%d.xml' % len(self.called))
+                    return self.resolve_string(next_data, context)
+
+        res_instance = Resolver()
+        parser = etree.XMLParser(load_dtd=True)
+        parser.resolvers.add(res_instance)
+
+        tree = etree.parse(fileInTestDir('include/test_xinclude.xml'),
+                           parser=parser)
+
+        self.include(tree)
+
+        called = list(res_instance.called.items())
+        called.sort()
+        self.assertEqual(
+            [("DONE", True), ("input", True), ("test.xml", True),
+             ("test2.xml", True), ("test3.xml", True), ("test4.xml", True)],
+            called)
+
 
 class ETreeXIncludeTestCase(_XIncludeTestCase):
     def include(self, tree):

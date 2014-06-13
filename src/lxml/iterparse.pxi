@@ -68,7 +68,7 @@ cdef class iterparse:
                  load_dtd=False, no_network=True, remove_blank_text=False,
                  compact=True, resolve_entities=True, remove_comments=False,
                  remove_pis=False, strip_cdata=True, encoding=None,
-                 html=False, recover=None, huge_tree=False,
+                 html=False, recover=None, huge_tree=False, collect_ids=True,
                  XMLSchema schema=None):
         if not hasattr(source, 'read'):
             self._filename = source
@@ -119,6 +119,7 @@ cdef class iterparse:
                 remove_comments=remove_comments,
                 remove_pis=remove_pis,
                 strip_cdata=strip_cdata,
+                collect_ids=True,
                 target=None,  # TODO
                 compact=compact)
 
@@ -131,6 +132,34 @@ cdef class iterparse:
         """
         def __get__(self):
             return self._parser.feed_error_log
+
+    property resolvers:
+        u"""The custom resolver registry of the last (or current) parser run.
+        """
+        def __get__(self):
+            return self._parser.resolvers
+
+    property version:
+        u"""The version of the underlying XML parser."""
+        def __get__(self):
+            return self._parser.version
+
+    def set_element_class_lookup(self, ElementClassLookup lookup = None):
+        u"""set_element_class_lookup(self, lookup = None)
+
+        Set a lookup scheme for element classes generated from this parser.
+
+        Reset it by passing None or nothing.
+        """
+        self._parser.set_element_class_lookup(lookup)
+
+    def makeelement(self, _tag, attrib=None, nsmap=None, **_extra):
+        u"""makeelement(self, _tag, attrib=None, nsmap=None, **_extra)
+
+        Creates a new element associated with this parser.
+        """
+        self._parser.makeelement(
+            _tag, attrib=None, nsmap=None, **_extra)
 
     @cython.final
     cdef _close_source(self):

@@ -2,7 +2,119 @@
 lxml changelog
 ==============
 
-3.3.1 (2014-??)
+Latest changes
+==================
+
+Features added
+--------------
+
+* New ``XMLParser`` option ``collect_ids=False`` to disable ID hash table
+  creation.  This can substantially speed up parsing of documents with many
+  different IDs that are not used.
+
+* The parser uses per-document hash tables for XML IDs.  This reduces the
+  load of the global parser dict and thus speeds up parsing for documents
+  with many different IDs.
+
+* ``ElementTree.getelementpath(element)`` returns a structural ElementPath
+  expression for the given element, which can be used for lookups later.
+
+* ``xmlfile()`` accepts a new argument ``close=True`` to close file(-like)
+  objects after writing to them.
+
+* Allow "bytearray" type for text input.
+
+Bugs fixed
+----------
+
+Other changes
+-------------
+
+* LP#400588: decoding errors have become hard errors even in recovery mode.
+  Previously, they could lead to an internal tree representation in a mixed
+  encoding state, which lead to very late errors or even silently incorrect
+  behaviour during tree traversal or serialisation.
+
+* Requires Python 2.6, 2.7, 3.2 or later. No longer supports
+  Python 2.4, 2.5 and 3.1, use lxml 3.3.x for those.
+
+* Requires libxml2 2.7.0 or later and libxslt 1.1.23 or later,
+  use lxml 3.3.x with older versions.
+
+
+3.3.5 (2014-04-18)
+==================
+
+Bugs fixed
+----------
+
+* HTML cleaning could fail to strip javascript links that mix control
+  characters into the link scheme.
+
+
+3.3.4 (2014-04-03)
+==================
+
+Features added
+--------------
+
+* Source line numbers above 65535 are available on Elements when
+  using libxml2 2.9 or later.
+
+Bugs fixed
+----------
+
+* ``lxml.html.fragment_fromstring()`` failed for bytes input in Py3.
+
+Other changes
+-------------
+
+
+3.3.3 (2014-03-04)
+==================
+
+Bugs fixed
+----------
+
+* LP#1287118: Crash when using Element subtypes with ``__slots__``.
+
+Other changes
+-------------
+
+* The internal classes ``_LogEntry`` and ``_Attrib`` can no longer be
+  subclassed from Python code.
+
+
+3.3.2 (2014-02-26)
+==================
+
+Bugs fixed
+----------
+
+* The properties ``resolvers`` and ``version``, as well as the methods
+  ``set_element_class_lookup()`` and ``makeelement()``, were lost from
+  ``iterparse`` objects in 3.3.0.
+
+* LP#1222132: instances of ``XMLSchema``, ``Schematron`` and ``RelaxNG``
+  did not clear their local ``error_log`` before running a validation.
+
+* LP#1238500: lxml.doctestcompare mixed up "expected" and "actual" in
+  attribute values.
+
+* Some file I/O tests were failing in MS-Windows due to non-portable temp
+  file usage.  Initial patch by Gabi Davar.
+
+* LP#910014: duplicate IDs in a document were not reported by DTD validation.
+
+* LP#1185332: ``tostring(method="html")`` did not use HTML serialisation
+  semantics for trailing tail text.  Initial patch by Sylvain Viollon.
+
+* LP#1281139: ``.attrib`` value of Comments lost its mutation methods
+  in 3.3.0.  Even though it is empty and immutable, it should still
+  provide the same interface as that returned for Elements.
+
+
+3.3.1 (2014-02-12)
 ==================
 
 Features added
