@@ -474,6 +474,13 @@ ffi.cdef("""
 					 void *data);
     void * 		xmlHashLookup	(xmlHashTablePtr table,
 					 const xmlChar *name);
+    typedef void (*xmlHashDeallocator)(void *payload, xmlChar *name);
+    xmlHashTablePtr xmlHashCreate(int size);
+    xmlHashTablePtr xmlHashCreateDict(int size,
+				      xmlDictPtr dict);
+    int xmlHashSize(xmlHashTablePtr table);
+    void xmlHashFree(xmlHashTablePtr table,
+		     xmlHashDeallocator f);
 
     /* URI */
     xmlChar * 	xmlBuildURI		(const xmlChar *URI,

@@ -15,7 +15,9 @@ from .apihelpers import _moveTail
 from .apihelpers import _collectText, _removeText, _setNodeText, _setTailText
 from .apihelpers import _collectChildren, _namespacedName, _countElements
 from .apihelpers import _getAttributeValue, _setAttributeValue, _delAttribute
-from .apihelpers import _findChild, _appendChild, _getNsTag, _collectAttributes, _attributeValue
+from .apihelpers import _findChild, _appendChild, _getNs, _getNsTag, _namespacedNameFromNsName
+from .apihelpers import _tagMatches
+from .apihelpers import _collectAttributes, _attributeValue
 from .apihelpers import _appendSibling, _prependSibling, _copyNonElementSiblings
 from .apihelpers import _searchNsByHref, _nextElement, _previousElement, _parentElement, _removeNode, _tagMatchesExactly, _nsTagMatchesExactly, _mapTagsToQnameMatchArray, _resolveQNameText
 from .apihelpers import _findChildForwards, _findChildBackwards
@@ -43,7 +45,33 @@ _initThreadLogging()
 # initialize parser (and threading)
 xmlparser.xmlInitParser()
 
-EMPTY_READ_ONLY_DICT = dict()
+try:
+    from collections.abc import MutableMapping  # Py3.3+
+except ImportError:
+    from collections import MutableMapping  # Py2.6+
+
+class _ImmutableMapping(MutableMapping):
+    def __getitem__(self, key):
+        raise KeyError, key
+
+    def __setitem__(self, key, value):
+        raise KeyError, key
+
+    def __delitem__(self, key):
+        raise KeyError, key
+
+    def __contains__(self, key):
+        return False
+
+    def __len__(self):
+        return 0
+
+    def __iter__(self):
+        return ITER_EMPTY
+    iterkeys = itervalues = iteritems = __iter__
+
+IMMUTABLE_EMPTY_MAPPING = _ImmutableMapping()
+del MutableMapping, _ImmutableMapping
 
 def NEW_ELEMENT(cls):
     return object.__new__(cls)
@@ -95,12 +123,7 @@ class LxmlError(Error):
     """
     def __init__(self, message, error_log=None):
         from .xmlerror import _copyGlobalErrorLog
-
-        if python.PY_VERSION_HEX >= 0x02050000:
-            # Python >= 2.5 uses new style class exceptions
-            super(_Error, self).__init__(message)
-        else:
-            error_super_init(self, message)
+        super(_Error, self).__init__(message)
         if error_log is None:
             self.error_log = _copyGlobalErrorLog()
         else:
@@ -1327,7 +1350,7 @@ class __ContentOnlyElement(_Element):
 
     @property
     def attrib(self):
-        return {}
+        return IMMUTABLE_EMPTY_MAPPING
 
     @property
     def text(self):
@@ -1667,7 +1690,14 @@ class _ElementTree(object):
     def getpath(self, element):
         u"""getpath(self, element)
 
-        Returns a structural, absolute XPath expression to find that element.
+        Returns a structural, absolute XPath expression to find the element.
+
+        For namespaced elements, the expression uses prefixes from the
+        document, which therefore need to be provided in order to make any
+        use of the expression in XPath.
+
+        Also see the method getelementpath(self, element), which returns a
+        self-contained ElementPath expression.
         """
         _assertValidNode(element)
         if self._context_node is not None:
@@ -1691,6 +1721,68 @@ class _ElementTree(object):
         path = funicode(c_path)
         tree.xmlFree(c_path)
         return path
+
+    def getelementpath(self, element):
+        u"""getelementpath(self, element)
+
+        Returns a structural, absolute ElementPath expression to find the
+        element.  This path can be used in the .find() method to look up
+        the element, provided that the elements along the path and their
+        list of immediate children were not modified in between.
+
+        ElementPath has the advantage over an XPath expression (as returned
+        by the .getpath() method) that it does not require additional prefix
+        declarations.  It is always self-contained.
+        """
+        _assertValidNode(element)
+        if element._c_node.type != tree.XML_ELEMENT_NODE:
+            raise ValueError, u"input is not an Element"
+        if self._context_node is not None:
+            root = self._context_node
+        elif self._doc is not None:
+            root = self._doc.getroot()
+        else:
+            raise ValueError, u"Element is not in this tree"
+        _assertValidNode(root)
+        if element._doc is not root._doc:
+            raise ValueError, u"Element is not in this tree"
+
+        path = []
+        c_element = element._c_node
+        while c_element != root._c_node:
+            c_name = c_element.name
+            c_href = _getNs(c_element)
+            tag = _namespacedNameFromNsName(c_href, c_name)
+            if not c_href:
+                c_href = b''  # no namespace (NULL is wildcard)
+            # use tag[N] if there are preceding siblings with the same tag
+            count = 0
+            c_node = c_element.prev
+            while c_node:
+                if c_node.type == tree.XML_ELEMENT_NODE:
+                    if _tagMatches(c_node, c_href, c_name):
+                        count += 1
+                c_node = c_node.prev
+            if count:
+                tag = '%s[%d]' % (tag, count+1)
+            else:
+                # use tag[1] if there are following siblings with the same tag
+                c_node = c_element.next
+                while c_node:
+                    if c_node.type == tree.XML_ELEMENT_NODE:
+                        if _tagMatches(c_node, c_href, c_name):
+                            tag += '[1]'
+                            break
+                    c_node = c_node.next
+
+            path.append(tag)
+            c_element = c_element.parent
+            if not c_element or c_element.type != tree.XML_ELEMENT_NODE:
+                raise ValueError, u"Element is not in this tree."
+        if not path:
+            return '.'
+        path.reverse()
+        return '/'.join(path)
 
     def getiterator(self, tag=None, *tags):
         u"""getiterator(self, *tags, tag=None)
@@ -2715,7 +2807,7 @@ def tounicode(element_or_tree, method=u"xml", pretty_print=False,
     Serialize an element to the Python unicode representation of its XML
     tree.
 
-    :deprecated: use ``tostring(el, encoding=unicode)`` instead.
+    :deprecated: use ``tostring(el, encoding='unicode')`` instead.
 
     Note that the result does not carry an XML encoding declaration and is
     therefore not necessarily suited for serialization to byte streams without

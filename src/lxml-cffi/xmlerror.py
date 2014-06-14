@@ -48,41 +48,70 @@ void pyXsltGenericErrorFunc(void* ctxt, char* msg, ...)
 {
     xmlError c_error;
     va_list args;
-    char* c_text;
+    char* c_text = NULL;
     char* c_message;
-    char* c_element;
-    int i, text_size, element_size;
+    char* c_element = NULL;
+    char* c_pos;
+    char* c_name_pos;
+    char* c_str;
+    int text_size, element_size, format_count, c_int;
     if (!msg || msg[0] == '\\n' || msg[0] == '\\0')
         return;
 
+    c_error.file = NULL;
+    c_error.line = 0;
+
     va_start(args, msg);
-    if (msg[0] == '%' && msg[1] == 's')
-        c_text = va_arg(args, char*);
-    else
-        c_text = NULL;
-    if (strstr(msg, "file %s")) {
-        c_error.file = va_arg(args, char*);
-        if (c_error.file &&
-            strncmp(c_error.file,
-                    "string://__STRING__XSLT", 23) == 0)
-            c_error.file = "<xslt>";
+    // parse "NAME %s" chunks from the format string
+    c_name_pos = c_pos = msg;
+    format_count = 0;
+    while (c_pos[0]) {
+        if (c_pos[0] == '%') {
+            c_pos += 1;
+            if (c_pos[0] == 's') {  // "%s"
+                format_count += 1;
+                c_str = va_arg(args, char*);
+                if (c_pos == msg + 1) {
+                    c_text = c_str;  // msg == "%s..."
+                }
+                else if (c_name_pos[0] == 'e') {
+                    if (strncmp(c_name_pos, "element %s", 10)) {
+                        c_element = c_str;
+                    }
+                }
+                else if (c_name_pos[0] == 'f') {
+                    if (strncmp(c_name_pos, "file %s", 7)) {
+                        if (strncmp("string://__STRING__XSLT", c_str, 23) == 0) {
+                            c_str = "<xslt>";
+                        }
+                        c_error.file = c_str;
+                    }
+                }
+            }
+            else if (c_pos[0] == 'd') {  // "%d"
+                format_count += 1;
+                c_int = va_arg(args, int);
+                if (strncmp(c_name_pos, "line %d", 7)) {
+                    c_error.line = c_int;
+                }
+            }
+            else if (c_pos[0] != '%') {  // "%%" == "%"
+                format_count += 1;
+                break;  // unexpected format or end of string => abort
+            }
+        }
+        else if (c_pos[0] == ' ') {
+            if (c_pos[1] != '%') {
+                c_name_pos = c_pos + 1;
+            }
+        }
+        c_pos += 1;
     }
-    else {
-        c_error.file = NULL;
-    }
-    if (strstr(msg, "line %d"))
-        c_error.line = va_arg(args, int);
-    else
-        c_error.line = 0;
-    if (strstr(msg, "element %s"))
-        c_element = va_arg(args, char*);
-    else
-        c_element = NULL;
     va_end(args);
 
     c_message = NULL;
     if (!c_text) {
-        if (c_element && strchr(msg, '%') == strrchr(msg, '%')) {
+        if (c_element && format_count == 1) {
             /* special case: a single occurrence of 'element %s' */
             text_size    = strlen(msg);
             element_size = strlen(c_element);
@@ -238,6 +267,8 @@ class _LogEntry(object):
                     'ascii', 'backslashreplace')
             except UnicodeDecodeError:
                 self._message = u'<undecodable error message>'
+            except TypeError:
+                raise TypeError("AFA", message)
         if self._c_message:
             # clean up early
             tree.xmlFree(self._c_message)

@@ -23,26 +23,22 @@ class ParseError(LxmlSyntaxError):
     For compatibility with ElementTree 1.3 and later.
     """
     def __init__(self, message, code, line, column):
-        if python.PY_VERSION_HEX >= 0x02050000:
-            # Python >= 2.5 uses new style class exceptions
-            super(_ParseError, self).__init__(message)
-        else:
-            _LxmlSyntaxError.__init__(self, message)
+        super(_ParseError, self).__init__(message)
         self.position = (line, column)
         self.code = code
 
-_LxmlSyntaxError = LxmlSyntaxError
 _ParseError = ParseError
+
 
 class XMLSyntaxError(ParseError):
     u"""Syntax error while parsing an XML document.
     """
-    pass
+
 
 class ParserError(LxmlError):
     u"""Internal lxml parser error.
     """
-    pass
+
 
 class _ParserDictionaryContext(object):
     # Global parser context to share the string dictionary.
@@ -427,6 +423,7 @@ class _ParserContext(_ResolverContext):
 
     def __init__(self):
         self._c_ctxt = None
+        self._collect_ids = True
         if not config.ENABLE_THREADING:
             self._lock = None
         else:
@@ -448,8 +445,7 @@ class _ParserContext(_ResolverContext):
             if self._c_ctxt.html:
                 htmlparser.htmlCtxtReset(self._c_ctxt)
                 self._c_ctxt.disableSAX = 0 # work around bug in libxml2
-            elif self._c_ctxt.spaceTab or \
-                    _LIBXML_VERSION_INT >= 20629: # work around bug in libxml2
+            else:
                 xmlparser.xmlClearParserCtxt(self._c_ctxt)
 
     def prepare(self):
@@ -508,7 +504,7 @@ def _raiseParseError(ctxt, filename, error_log):
             try:
                 message = message.decode('utf-8')
             except UnicodeDecodeError:
-                # the filename may be in there => play safe
+                # the filename may be in there => play it safe
                 message = message.decode('iso8859-1')
             message = u"Error reading file '%s': %s" % (
                 filename, message.strip())
@@ -540,9 +536,18 @@ def _handleParseResult(context, c_ctxt, result, filename, recover, free_doc):
         c_ctxt.myDoc = tree.ffi.NULL
 
     if result:
-        if context._validator is not None and \
-                not context._validator.isvalid():
-            well_formed = 0 # actually not 'valid', but anyway ...
+        if (context._validator is not None and
+                not context._validator.isvalid()):
+            well_formed = 0  # actually not 'valid', but anyway ...
+        elif (not c_ctxt.wellFormed and not c_ctxt.html and
+                c_ctxt.charset == tree.XML_CHAR_ENCODING_8859_1 and
+                [1 for error in context._error_log
+                 if error.type == ErrorTypes.ERR_INVALID_CHAR]):
+            # An encoding error occurred and libxml2 switched from UTF-8
+            # input to (undecoded) Latin-1, at some arbitrary point in the
+            # document.  Better raise an error than allowing for a broken
+            # tree with mixed encodings.
+            well_formed = 0
         elif recover or (c_ctxt.wellFormed and
                          c_ctxt.lastError.level < xmlerror.XML_ERR_ERROR):
             well_formed = 1
@@ -643,8 +648,8 @@ class _BaseParser(object):
     _events_to_collect = None
 
     def __init__(self, parse_options, for_html, schema,
-                 remove_comments, remove_pis, strip_cdata, target,
-                 encoding):
+                 remove_comments, remove_pis, strip_cdata, collect_ids,
+                 target, encoding):
         if not isinstance(self, (XMLParser, HTMLParser)):
             raise TypeError, u"This class cannot be instantiated"
 
@@ -654,6 +659,7 @@ class _BaseParser(object):
         self._remove_comments = remove_comments
         self._remove_pis = remove_pis
         self._strip_cdata = strip_cdata
+        self._collect_ids = collect_ids
         self._schema = schema
 
         self._resolvers = _ResolverRegistry()
@@ -683,19 +689,14 @@ class _BaseParser(object):
     def _getParserContext(self):
         if self._parser_context is None:
             self._parser_context = self._createContext(self.target, None)
+            self._parser_context._collect_ids = self._collect_ids
             if self._schema is not None:
                 self._parser_context._validator = \
                     self._schema._newSaxValidator(
                         self._parse_options & xmlparser.XML_PARSE_DTDATTR)
             pctxt = self._newParserCtxt()
             _initParserContext(self._parser_context, self._resolvers, pctxt)
-            if self._remove_comments:
-                pctxt.sax.comment = xmlparser.ffi.NULL
-            if self._remove_pis:
-                pctxt.sax.processingInstruction = xmlparser.ffi.NULL
-            if self._strip_cdata:
-                # hard switch-off for CDATA nodes => makes them plain text
-                pctxt.sax.cdataBlock = xmlparser.ffi.NULL
+            self._configureSaxContext(pctxt)
         return self._parser_context
 
     def _getPushParserContext(self):
@@ -709,13 +710,7 @@ class _BaseParser(object):
             pctxt = self._newPushParserCtxt()
             _initParserContext(
                 self._push_parser_context, self._resolvers, pctxt)
-            if self._remove_comments:
-                pctxt.sax.comment = xmlparser.ffi.NULL
-            if self._remove_pis:
-                pctxt.sax.processingInstruction = xmlparser.ffi.NULL
-            if self._strip_cdata:
-                # hard switch-off for CDATA nodes => makes them plain text
-                pctxt.sax.cdataBlock = xmlparser.ffi.NULL
+            self._configureSaxContext(pctxt)
         return self._push_parser_context
 
     def _createContext(self, target, events_to_collect):
@@ -733,6 +728,15 @@ class _BaseParser(object):
             events, tag = events_to_collect
             sax_context._setEventFilter(events, tag)
         return sax_context
+
+    def _configureSaxContext(self, pctxt):
+        if self._remove_comments:
+            pctxt.sax.comment = xmlparser.ffi.NULL
+        if self._remove_pis:
+            pctxt.sax.processingInstruction = xmlparser.ffi.NULL
+        if self._strip_cdata:
+            # hard switch-off for CDATA nodes => makes them plain text
+            pctxt.sax.cdataBlock = xmlparser.ffi.NULL
 
     def _registerHtmlErrorHandler(self, c_ctxt):
         sax = c_ctxt.sax
@@ -759,6 +763,7 @@ class _BaseParser(object):
             c_ctxt = xmlparser.xmlNewParserCtxt()
         if not c_ctxt:
             raise MemoryError
+        c_ctxt.sax.startDocument = _initSaxDocument
         return c_ctxt
 
     def _newPushParserCtxt(self):
@@ -781,6 +786,7 @@ class _BaseParser(object):
                 xmlparser.xmlCtxtUseOptions(c_ctxt, self._parse_options)
         if not c_ctxt:
             raise MemoryError
+        c_ctxt.sax.startDocument = _initSaxDocument
         return c_ctxt
 
     @property
@@ -957,6 +963,41 @@ class _BaseParser(object):
         finally:
             context.cleanup()
 
+
+@xmlparser.ffi.callback("startDocumentSAXFunc")
+def _initSaxDocument(ctxt):
+    xmlparser.xmlSAX2StartDocument(ctxt)
+    c_ctxt = xmlparser.ffi.cast("xmlParserCtxtPtr", ctxt)
+    c_doc = c_ctxt.myDoc
+
+    # set up document dict
+    if c_doc and c_ctxt.dict and not c_doc.dict:
+        # I have no idea why libxml2 disables this - we need it
+        c_ctxt.dictNames = 1
+        c_doc.dict = c_ctxt.dict
+        xmlparser.xmlDictReference(c_ctxt.dict)
+
+    # set up XML ID hash table
+    if c_ctxt._private and not c_ctxt.html:
+        context = xmlparser.ffi.from_handle(c_ctxt._private)
+        if context._collect_ids:
+            # keep the global parser dict from filling up with XML IDs
+            if c_doc and not c_doc.ids:
+                # memory errors are not fatal here
+                c_dict = xmlparser.xmlDictCreate()
+                if c_dict:
+                    c_doc.ids = tree.xmlHashCreateDict(0, c_dict)
+                    xmlparser.xmlDictFree(c_dict)
+                else:
+                    c_doc.ids = tree.xmlHashCreate(0)
+        else:
+            c_ctxt.loadsubset |= xmlparser.XML_SKIP_IDS
+            if c_doc and c_doc.ids and not tree.xmlHashSize(c_doc.ids):
+                # already initialised but empty => clear
+                tree.xmlHashFree(c_doc.ids, NULL)
+                c_doc.ids = NULL
+
+
 ############################################################
 ## ET feed parser
 ############################################################
@@ -1130,11 +1171,6 @@ class _FeedParser(_BaseParser):
 
 def _htmlCtxtResetPush(c_ctxt, c_data, buffer_len,
                        c_filename, c_encoding, parse_options):
-    # libxml2 crashes if spaceTab is not initialised
-    if _LIBXML_VERSION_INT < 20629 and not c_ctxt.spaceTab:
-        c_ctxt.spaceTab = tree.xmlMalloc(10 * tree.ffi.sizeof("int"))
-        c_ctxt.spaceMax = 10
-
     # libxml2 lacks an HTML push parser setup function
     error = xmlparser.xmlCtxtResetPush(
         c_ctxt, xmlparser.ffi.NULL, 0, c_filename, c_encoding)
@@ -1158,11 +1194,12 @@ _XML_DEFAULT_PARSE_OPTIONS = (
     xmlparser.XML_PARSE_NOENT   |
     xmlparser.XML_PARSE_NOCDATA |
     xmlparser.XML_PARSE_NONET   |
-    xmlparser.XML_PARSE_COMPACT
+    xmlparser.XML_PARSE_COMPACT |
+    xmlparser.XML_PARSE_BIG_LINES
     )
 
 class XMLParser(_FeedParser):
-    u"""XMLParser(self, encoding=None, attribute_defaults=False, dtd_validation=False, load_dtd=False, no_network=True, ns_clean=False, recover=False, XMLSchema schema=None, remove_blank_text=False, resolve_entities=True, remove_comments=False, remove_pis=False, strip_cdata=True, target=None, compact=True)
+    u"""XMLParser(self, encoding=None, attribute_defaults=False, dtd_validation=False, load_dtd=False, no_network=True, ns_clean=False, recover=False, XMLSchema schema=None, remove_blank_text=False, resolve_entities=True, remove_comments=False, remove_pis=False, strip_cdata=True, collect_ids=True, target=None, compact=True)
 
     The XML parser.
 
@@ -1186,11 +1223,12 @@ class XMLParser(_FeedParser):
     - no_network         - prevent network access for related files (default: True)
     - ns_clean           - clean up redundant namespace declarations
     - recover            - try hard to parse through broken XML
-    - remove_blank_text  - discard blank text nodes
+    - remove_blank_text  - discard blank text nodes that appear ignorable
     - remove_comments    - discard comments
     - remove_pis         - discard processing instructions
     - strip_cdata        - replace CDATA sections by normal text content (default: True)
-    - compact            - safe memory for short text content (default: True)
+    - compact            - save memory for short text content (default: True)
+    - collect_ids        - create a hash table of XML IDs (default: True, always True with DTD validation)
     - resolve_entities   - replace entities by their text value (default: True)
     - huge_tree          - disable security restrictions and support very deep trees
                            and very long text content (only affects libxml2 2.7+)
@@ -1210,7 +1248,7 @@ class XMLParser(_FeedParser):
                  ns_clean=False, recover=False, schema=None,
                  huge_tree=False, remove_blank_text=False, resolve_entities=True,
                  remove_comments=False, remove_pis=False, strip_cdata=True,
-                 target=None, compact=True):
+                 collect_ids=True, target=None, compact=True):
         parse_options = _XML_DEFAULT_PARSE_OPTIONS
         if load_dtd:
             parse_options = parse_options | xmlparser.XML_PARSE_DTDLOAD
@@ -1240,7 +1278,7 @@ class XMLParser(_FeedParser):
 
         _BaseParser.__init__(self, parse_options, 0, schema,
                              remove_comments, remove_pis, strip_cdata,
-                             target, encoding)
+                             collect_ids, target, encoding)
 
 
 class XMLPullParser(XMLParser):
@@ -1321,11 +1359,11 @@ class HTMLParser(_FeedParser):
 
     - recover            - try hard to parse through broken HTML (default: True)
     - no_network         - prevent network access for related files (default: True)
-    - remove_blank_text  - discard empty text nodes
+    - remove_blank_text  - discard empty text nodes that are ignorable (i.e. not actual text content)
     - remove_comments    - discard comments
     - remove_pis         - discard processing instructions
     - strip_cdata        - replace CDATA sections by normal text content (default: True)
-    - compact            - safe memory for short text content (default: True)
+    - compact            - save memory for short text content (default: True)
 
     Other keyword arguments:
 
@@ -1351,7 +1389,7 @@ class HTMLParser(_FeedParser):
             parse_options = parse_options ^ htmlparser.HTML_PARSE_COMPACT
 
         _BaseParser.__init__(self, parse_options, 1, schema,
-                             remove_comments, remove_pis, strip_cdata,
+                             remove_comments, remove_pis, strip_cdata, True,
                              target, encoding)
 
 

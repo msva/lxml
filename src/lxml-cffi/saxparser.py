@@ -5,7 +5,7 @@ from inspect import getargspec as inspect_getargspec
 from .includes import xmlparser, xmlerror
 from .apihelpers import _namespacedNameFromNsName, _makeElement, _makeSubElement
 from .apihelpers import funicode, funicodeOrNone, funicodeOrEmpty, _appendChild
-from .etree import EMPTY_READ_ONLY_DICT
+from .etree import IMMUTABLE_EMPTY_MAPPING
 from .etree import _documentFactory, _elementFactory, _Element
 from . import python
 from .includes import tree
@@ -282,7 +282,7 @@ def _handleSaxTargetStart(
             if c_ctxt.loadsubset & xmlparser.XML_COMPLETE_ATTRS == 0:
                 c_nb_attributes -= c_nb_defaulted
         if c_nb_attributes == 0:
-            attrib = EMPTY_READ_ONLY_DICT
+            attrib = IMMUTABLE_EMPTY_MAPPING
         else:
             attrib = {}
             for i in xrange(c_nb_attributes):
@@ -298,7 +298,7 @@ def _handleSaxTargetStart(
                 attrib[name] = value
                 c_attributes += 5
         if c_nb_namespaces == 0:
-            nsmap = EMPTY_READ_ONLY_DICT
+            nsmap = IMMUTABLE_EMPTY_MAPPING
         else:
             nsmap = {}
             for i in xrange(c_nb_namespaces):
@@ -349,7 +349,7 @@ def _handleSaxTargetStartNoNs(ctxt, c_name, c_attributes):
     context = xmlparser.ffi.from_handle(c_ctxt._private)
     try:
         if not c_attributes:
-            attrib = EMPTY_READ_ONLY_DICT
+            attrib = IMMUTABLE_EMPTY_MAPPING
         else:
             attrib = {}
             while c_attributes[0]:
@@ -358,7 +358,7 @@ def _handleSaxTargetStartNoNs(ctxt, c_name, c_attributes):
                 c_attributes += 2
         element = _callTargetSaxStart(
             context, c_ctxt, funicode(c_name),
-            attrib, EMPTY_READ_ONLY_DICT)
+            attrib, IMMUTABLE_EMPTY_MAPPING)
         if context._event_filter & (PARSE_EVENT_FILTER_END |
                                     PARSE_EVENT_FILTER_START):
             _pushSaxStartEvent(context, c_ctxt, xmlparser.ffi.NULL, c_name, element)
@@ -489,11 +489,6 @@ def _handleSaxStartDocument(ctxt):
     context = xmlparser.ffi.from_handle(c_ctxt._private)
     context._origSaxStartDocument(ctxt)
     c_doc = c_ctxt.myDoc
-    if c_doc and c_ctxt.dict and not c_doc.dict:
-        # I have no idea why libxml2 disables this - we need it
-        c_ctxt.dictNames = 1
-        c_doc.dict = c_ctxt.dict
-        xmlparser.xmlDictReference(c_ctxt.dict)
     try:
         context.startDocument(c_doc)
     except:
@@ -693,7 +688,7 @@ class TreeBuilder(_SaxParserTarget):
         Opens a new element.
         """
         if nsmap is None:
-            nsmap = EMPTY_READ_ONLY_DICT
+            nsmap = IMMUTABLE_EMPTY_MAPPING
         return self._handleSaxStart(tag, attrs, nsmap)
 
     def end(self, tag):

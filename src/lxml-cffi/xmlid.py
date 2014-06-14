@@ -99,6 +99,7 @@ class _IDDict:
     def __len__(self):
         if self._keys is None:
             self._keys = self._build_keys()
+        print("AFA", "len", len(self._keys))
         return len(self._keys)
 
     def items(self):

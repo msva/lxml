@@ -118,11 +118,8 @@ class Schematron(_Validator):
 
     def __dealloc__(self):
         schematron.xmlSchematronFree(self._c_schema)
-        if _LIBXML_VERSION_INT >= 20631:
-            # earlier libxml2 versions may have freed the document in
-            # xmlSchematronFree() already, we don't know ...
-            if self._c_schema_doc is not NULL:
-                tree.xmlFreeDoc(self._c_schema_doc)
+        if self._c_schema_doc is not NULL:
+            tree.xmlFreeDoc(self._c_schema_doc)
 
     def __call__(self, etree):
         u"""__call__(self, etree)
@@ -134,35 +131,21 @@ class Schematron(_Validator):
         doc = _documentOrRaise(etree)
         root_node = _rootNodeOrRaise(etree)
 
-        if _LIBXML_VERSION_INT >= 20632 and \
-                schematron.XML_SCHEMATRON_OUT_ERROR != 0:
-            options = schematron.XML_SCHEMATRON_OUT_ERROR
-        else:
-            options = schematron.XML_SCHEMATRON_OUT_QUIET
-            # hack to switch off stderr output
-            options = options | schematron.XML_SCHEMATRON_OUT_XML
-
         valid_ctxt = schematron.xmlSchematronNewValidCtxt(
-            self._c_schema, options)
+            self._c_schema, schematron.XML_SCHEMATRON_OUT_ERROR)
         if not valid_ctxt:
             raise MemoryError()
 
-        if _LIBXML_VERSION_INT >= 20632:
+        try:
+            self._error_log.clear()
             schematron.xmlSchematronSetValidStructuredErrors(
                 valid_ctxt, _receiveError, self._error_log.get_handle())
             c_doc = _fakeRootDoc(doc._c_doc, root_node._c_node)
             if 1:
                 ret = schematron.xmlSchematronValidateDoc(valid_ctxt, c_doc)
             _destroyFakeDoc(doc._c_doc, c_doc)
-        else:
-            ret = -1
-            with self._error_log:
-                c_doc = _fakeRootDoc(doc._c_doc, root_node._c_node)
-                if 1:
-                    ret = schematron.xmlSchematronValidateDoc(valid_ctxt, c_doc)
-                _destroyFakeDoc(doc._c_doc, c_doc)
-
-        schematron.xmlSchematronFreeValidCtxt(valid_ctxt)
+        finally:
+            schematron.xmlSchematronFreeValidCtxt(valid_ctxt)
 
         if ret == -1:
             raise SchematronValidateError(

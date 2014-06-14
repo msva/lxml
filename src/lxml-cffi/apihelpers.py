@@ -1280,7 +1280,7 @@ def _utf8(s):
     elif isinstance(s, unicode):
         utf8_string = s.encode('utf8')
         invalid = check_string_utf8(utf8_string) == -1 # non-XML?
-    elif isinstance(s, bytes):
+    elif isinstance(s, (bytes, bytearray)):
         utf8_string = bytes(s)
         invalid = check_string_utf8(utf8_string)
     else:
@@ -1301,15 +1301,13 @@ def _isFilePath(c_path):
     if c_path[0] == '/':
         return 1
     # test if it looks like an absolute Windows path or URL
-    if (c_path[0] >= 'a' and c_path[0] <= 'z') or \
-            (c_path[0] >= 'A' and c_path[0] <= 'Z'):
+    if 'a' <= c_path[0] <= 'z' or 'A' <= c_path[0] <= 'Z':
         if c_path[1] == ':' and (len(c_path) == 2 or c_path[2] == '\\'):
             return 1  # C: or C:\...
         i = 0
         # test if it looks like a URL with scheme://
         while i < len(c_path) and (
-            c_path[i] >= 'a' and c_path[i] <= 'z') or \
-                (c_path[i] >= 'A' and c_path[i] <= 'Z'):
+            'a' <= c_path[i] <= 'z' or 'A' <= c_path[i] <= 'Z'):
             i += 1
         if c_path[i:i+2] == '://':
             return 0

@@ -40,13 +40,6 @@ class RelaxNG(_Validator):
             doc = _documentOrRaise(etree)
             root_node = _rootNodeOrRaise(etree)
             c_node = root_node._c_node
-            # work around for libxml2 crash bug if document is not RNG at all
-            if _LIBXML_VERSION_INT < 20624:
-                c_href = _getNs(c_node)
-                if c_href is NULL or \
-                       tree.xmlStrcmp(
-                           c_href, 'http://relaxng.org/ns/structure/1.0') != 0:
-                    raise RelaxNGParseError, u"Document is not Relax NG"
             fake_c_doc = _fakeRootDoc(doc._c_doc, root_node._c_node)
             parser_ctxt = relaxng.xmlRelaxNGNewDocParserCtxt(fake_c_doc)
         elif file is not None:
@@ -73,12 +66,9 @@ class RelaxNG(_Validator):
             parser_ctxt, _receiveError, self._error_log.get_handle())
         self._c_schema = relaxng.xmlRelaxNGParse(parser_ctxt)
 
-        if _LIBXML_VERSION_INT >= 20624:
-            relaxng.xmlRelaxNGFreeParserCtxt(parser_ctxt)
+        relaxng.xmlRelaxNGFreeParserCtxt(parser_ctxt)
         if not self._c_schema:
             if fake_c_doc:
-                if _LIBXML_VERSION_INT < 20624:
-                    relaxng.xmlRelaxNGFreeParserCtxt(parser_ctxt)
                 _destroyFakeDoc(doc._c_doc, fake_c_doc)
             raise RelaxNGParseError(
                 self._error_log._buildExceptionMessage(
@@ -104,14 +94,16 @@ class RelaxNG(_Validator):
         if not valid_ctxt:
             raise MemoryError()
 
-        relaxng.xmlRelaxNGSetValidStructuredErrors(
-            valid_ctxt, _receiveError, self._error_log.get_handle())
-        c_doc = _fakeRootDoc(doc._c_doc, root_node._c_node)
-        if 1:
-            ret = relaxng.xmlRelaxNGValidateDoc(valid_ctxt, c_doc)
-        _destroyFakeDoc(doc._c_doc, c_doc)
-
-        relaxng.xmlRelaxNGFreeValidCtxt(valid_ctxt)
+        try:
+            self._error_log.clear()
+            relaxng.xmlRelaxNGSetValidStructuredErrors(
+                valid_ctxt, _receiveError, self._error_log.get_handle())
+            c_doc = _fakeRootDoc(doc._c_doc, root_node._c_node)
+            if 1:
+                ret = relaxng.xmlRelaxNGValidateDoc(valid_ctxt, c_doc)
+            _destroyFakeDoc(doc._c_doc, c_doc)
+        finally:
+            relaxng.xmlRelaxNGFreeValidCtxt(valid_ctxt)
 
         if ret == -1:
             raise RelaxNGValidateError(

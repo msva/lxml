@@ -241,7 +241,7 @@ def _writeNodeToBuffer(c_buffer, c_node, encoding, c_doctype,
 
     # write tail, trailing comments, etc.
     if with_tail:
-        _writeTail(c_buffer, c_node, encoding, pretty_print)
+        _writeTail(c_buffer, c_node, encoding, c_method, pretty_print)
     if write_complete_document:
         _writeNextSiblings(c_buffer, c_node, encoding, pretty_print)
     if pretty_print:
@@ -297,12 +297,16 @@ def _writeDtdToBuffer(c_buffer,
         c_node = c_node.next
     tree.xmlOutputBufferWrite(c_buffer, 3, "]>\n")
 
-def _writeTail(c_buffer, c_node, encoding, pretty_print):
+def _writeTail(c_buffer, c_node, encoding, c_method, pretty_print):
     u"Write the element tail."
     c_node = c_node.next
     while c_node and c_node.type == tree.XML_TEXT_NODE and not c_buffer.error:
-        tree.xmlNodeDumpOutput(c_buffer, c_node.doc, c_node, 0,
-                               pretty_print, encoding)
+        if c_method == OUTPUT_METHOD_HTML:
+            tree.htmlNodeDumpFormatOutput(
+                c_buffer, c_node.doc, c_node, encoding, pretty_print)
+        else:
+            tree.xmlNodeDumpOutput(
+                c_buffer, c_node.doc, c_node, 0, pretty_print, encoding)
         c_node = c_node.next
 
 def _writePrevSiblings(c_buffer, c_node,
@@ -343,10 +347,12 @@ def _writeNextSiblings(c_buffer, c_node,
 class _FilelikeWriter:
     _close_filelike = None
 
-    def __init__(self, filelike, exc_context=None, compression=None):
+    def __init__(self, filelike, exc_context=None, compression=None, close=False):
         if compression is not None and compression > 0:
             filelike = gzip.GzipFile(
                 fileobj=filelike, mode='wb', compresslevel=compression)
+            self._close_filelike = filelike.close
+        elif close:
             self._close_filelike = filelike.close
         self._filelike = filelike
         if exc_context is None:
@@ -439,7 +445,7 @@ def _tofilelike(f, element, encoding, doctype, method,
         doctype = _utf8(doctype)
         c_doctype = _xcstr(doctype)
 
-    writer, c_buffer = _create_output_buffer(f, c_enc, compression)
+    writer, c_buffer = _create_output_buffer(f, c_enc, compression, close=False)
 
     _writeNodeToBuffer(c_buffer, element._c_node, c_enc, c_doctype, c_method,
                        write_xml_declaration, write_doctype,
@@ -456,7 +462,7 @@ def _tofilelike(f, element, encoding, doctype, method,
     if error_result != xmlerror.XML_ERR_OK:
         _raiseSerialisationError(error_result)
 
-def _create_output_buffer(f, c_enc, compression):
+def _create_output_buffer(f, c_enc, compression, close):
     enchandler = tree.xmlFindCharEncodingHandler(c_enc)
     if not enchandler:
         raise LookupError(u"unknown encoding: '%s'" %
@@ -470,7 +476,7 @@ def _create_output_buffer(f, c_enc, compression):
                 return python.PyErr_SetFromErrno(IOError) # raises IOError
             writer = None
         elif hasattr(f, 'write'):
-            writer = _FilelikeWriter(f, compression=compression)
+            writer = _FilelikeWriter(f, compression=compression, close=close)
             c_buffer = writer._createOutputBuffer(enchandler)
         else:
             raise TypeError(
@@ -544,7 +550,7 @@ def _tofilelikeC14N(f, element, exclusive, with_comments, compression,
 # incremental serialisation
 
 class xmlfile(object):
-    """xmlfile(self, output_file, encoding=None, compression=None)
+    """xmlfile(self, output_file, encoding=None, compression=None, close=False)
 
     A simple mechanism for incremental XML serialisation.
 
@@ -563,24 +569,35 @@ class xmlfile(object):
                   for element in generate_some_elements():
                       # serialise generated elements into the XML file
                       xf.write(element)
+
+    If 'output_file' is a file(-like) object, passing ``close=True`` will
+    close it when exiting the context manager.  By default, it is left
+    to the owner to do that.  When a file path is used, lxml will take care
+    of opening and closing the file itself.  Also, when a compression level
+    is set, lxml will deliberately close the file to make sure all data gets
+    compressed and written.
     """
-    def __init__(self, output_file, encoding=None, compression=None):
+    def __init__(self, output_file, encoding=None, compression=None,
+                 close=False):
         self.output_file = output_file
         self.encoding = _utf8orNone(encoding)
         self.compresslevel = compression or 0
+        self.close = close
 
     def __enter__(self):
         assert self.output_file is not None
-        writer = _IncrementalFileWriter(
-            self.output_file, self.encoding, self.compresslevel)
-        self.writer = writer
-        return writer
+        self.writer = _IncrementalFileWriter(
+            self.output_file, self.encoding, self.compresslevel, self.close)
+        return self.writer
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.writer is not None:
             old_writer, self.writer = self.writer, None
             raise_on_error = exc_type is None
             old_writer._close(raise_on_error)
+            if self.close:
+                self.output_file = None
+
 
 (WRITER_STARTING,
  WRITER_DECL_WRITTEN,
@@ -588,15 +605,16 @@ class xmlfile(object):
  WRITER_IN_ELEMENT,
  WRITER_FINISHED) = range(5)
 
+
 class _IncrementalFileWriter(object):
-    def __init__(self, outfile, encoding, compresslevel):
+    def __init__(self, outfile, encoding, compresslevel, close):
         self._status = WRITER_STARTING
         self._element_stack = []
         if encoding is None:
             encoding = b'ASCII'
         self._encoding = encoding
         self._target, self._c_out = _create_output_buffer(
-            outfile, self._encoding, compresslevel)
+            outfile, self._encoding, compresslevel, close)
 
     def __dealloc__(self):
         if self._c_out:

@@ -3,10 +3,10 @@
 from .etree import _Validator, LxmlError, _ExceptionContext
 from .parser import _FileReaderContext
 from .includes import tree, xmlparser, dtdvalid
-from .xmlerror import _ErrorLog
+from .xmlerror import _ErrorLog, helpers
 from .apihelpers import _isString, _encodeFilename
 from .apihelpers import _documentOrRaise, _rootNodeOrRaise
-from .apihelpers import funicode
+from .apihelpers import funicode, funicodeOrNone
 from .proxy import _fakeRootDoc, _destroyFakeDoc
 
 class DTDError(LxmlError):
@@ -288,15 +288,21 @@ class DTD(_Validator):
 
     @property
     def name(self):
-        return funicode(self._c_dtd.name) if (self._c_dtd and self._c_dtd.name) else None
+        if not self._c_dtd:
+            return None
+        return funicodeOrNone(self._c_dtd.name)
 
     @property
     def external_id(self):
-        return funicode(self._c_dtd.ExternalID) if (self._c_dtd and self._c_dtd.ExternalID) else None
+        if not self._c_dtd:
+            return None
+        return funicodeOrNone(self._c_dtd.ExternalID)
 
     @property
     def system_url(self):
-        return funicode(self._c_dtd.SystemID) if (self._c_dtd and self._c_dtd.SystemID) else None
+        if not self._c_dtd:
+            return None
+        return funicodeOrNone(self._c_dtd.SystemID)
 
     def iterelements(self):
         c_node = self._c_dtd.children if self._c_dtd else tree.ffi.NULL
@@ -341,6 +347,11 @@ class DTD(_Validator):
         if not valid_ctxt:
             raise DTDError(u"Failed to create validation context")
 
+        # work around error reporting bug in libxml2 <= 2.9.1 (and later?)
+        # https://bugzilla.gnome.org/show_bug.cgi?id=724903
+        valid_ctxt.error = helpers.nullGenericErrorFunc
+        valid_ctxt.userData = dtdvalid.ffi.NULL
+
         try:
             with self._error_log:
                 c_doc = _fakeRootDoc(doc._c_doc, root_node._c_node)
@@ -352,10 +363,7 @@ class DTD(_Validator):
         if ret == -1:
             raise DTDValidateError(u"Internal error in DTD validation",
                                    self._error_log)
-        if ret == 1:
-            return True
-        else:
-            return False
+        return ret == 1
 
 
 def _parseDtdFromFilelike(file):

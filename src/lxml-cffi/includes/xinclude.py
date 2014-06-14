@@ -6,6 +6,9 @@ ffi.include(tree.ffi)
 ffi.cdef("""
     int 	xmlXIncludeProcessTreeFlags(xmlNodePtr tree,
 					 int flags);
+    int		xmlXIncludeProcessTreeFlagsData(xmlNodePtr tree,
+					 int flags,
+					 void *data);
 """)
 libxml = ffi.verify("""
     #include "libxml/xinclude.h"

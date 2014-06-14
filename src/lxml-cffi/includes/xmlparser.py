@@ -40,6 +40,9 @@ ffi.cdef("""
     void xmlDictFree(xmlDictPtr dict);
     int xmlDictReference(xmlDictPtr dict);
 
+    #define XML_COMPLETE_ATTRS ...  // SAX option for adding DTD default attributes
+    #define XML_SKIP_IDS ...        // SAX option for not building an XML ID dict
+
     // Parser Input
 
     typedef struct _xmlParserInput xmlParserInput;
@@ -53,6 +56,7 @@ ffi.cdef("""
         ...;
     };
 
+    void xmlSAX2StartDocument(void* ctxt);
     xmlParserInputBufferPtr xmlAllocParserInputBuffer		(xmlCharEncoding enc);
 
     // Parser Context
@@ -110,7 +114,9 @@ ffi.cdef("""
         int *              spaceTab;      /* array of space infos */
         int                progressive;   /* is this a progressive parsing */
         xmlDictPtr         dict;          /* dictionnary for the parser */
+        int                charset;       /* encoding of the in-memory content */
         void              *_private;      /* For user data, libxml won't touch it */
+        int                loadsubset;    /* should the external subset be loaded */
 
         int                options;       /* Extra options */
 
@@ -234,6 +240,9 @@ libxml = ffi.verify("""
 """,
 include_dirs=['/usr/include/libxml2'],
 libraries=['xml2'])
+
+#  libxml2 2.9.0+ only:
+XML_PARSE_BIG_LINES = 4194304 #  Store big lines numbers in text PSVI field
 
 for name in dir(libxml):
     if name.startswith(('XML_', 'xml')):
