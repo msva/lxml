@@ -15,8 +15,7 @@ this_dir = os.path.dirname(__file__)
 if this_dir not in sys.path:
     sys.path.insert(0, this_dir) # needed for Py3
 
-from common_imports import etree, BytesIO
-from common_imports import HelperTestCase
+from common_imports import etree, BytesIO, HelperTestCase, skipIf
 
 class _XmlFileTestCaseBase(HelperTestCase):
     _file = None  # to be set by specific subtypes below
@@ -144,6 +143,36 @@ class _XmlFileTestCaseBase(HelperTestCase):
                 xf.write('toast')
         self.assertXml('<test>toast</test>', encoding='utf16')
 
+    def test_buffering(self):
+        with etree.xmlfile(self._file, buffered=False) as xf:
+            with xf.element('test'):
+                self.assertXml("<test>")
+                xf.write('toast')
+                self.assertXml("<test>toast")
+                with xf.element('taste'):
+                    self.assertXml("<test>toast<taste>")
+                    xf.write('some', etree.Element("more"), "toast")
+                    self.assertXml("<test>toast<taste>some<more/>toast")
+                self.assertXml("<test>toast<taste>some<more/>toast</taste>")
+                xf.write('end')
+                self.assertXml("<test>toast<taste>some<more/>toast</taste>end")
+            self.assertXml("<test>toast<taste>some<more/>toast</taste>end</test>")
+        self.assertXml("<test>toast<taste>some<more/>toast</taste>end</test>")
+
+    def test_flush(self):
+        with etree.xmlfile(self._file, buffered=True) as xf:
+            with xf.element('test'):
+                self.assertXml("")
+                xf.write('toast')
+                self.assertXml("")
+                with xf.element('taste'):
+                    self.assertXml("")
+                    xf.flush()
+                    self.assertXml("<test>toast<taste>")
+                self.assertXml("<test>toast<taste>")
+            self.assertXml("<test>toast<taste>")
+        self.assertXml("<test>toast<taste></taste></test>")
+
     def test_failure_preceding_text(self):
         try:
             with etree.xmlfile(self._file) as xf:
@@ -195,12 +224,20 @@ class _XmlFileTestCaseBase(HelperTestCase):
             self.assertTrue(False)
 
     def _read_file(self):
+        pos = self._file.tell()
         self._file.seek(0)
-        return self._file.read()
+        try:
+            return self._file.read()
+        finally:
+            self._file.seek(pos)
 
     def _parse_file(self):
+        pos = self._file.tell()
         self._file.seek(0)
-        return etree.parse(self._file)
+        try:
+            return etree.parse(self._file)
+        finally:
+            self._file.seek(pos)
 
     def tearDown(self):
         if self._file is not None:
@@ -246,12 +283,22 @@ class TempPathXmlFileTestCase(_XmlFileTestCaseBase):
         self._tmpfile.seek(0)
         return etree.parse(self._tmpfile)
 
+    @skipIf(True, "temp file behaviour is too platform specific here")
+    def test_buffering(self):
+        pass
+
+    @skipIf(True, "temp file behaviour is too platform specific here")
+    def test_flush(self):
+        pass
+
 
 class SimpleFileLikeXmlFileTestCase(_XmlFileTestCaseBase):
     class SimpleFileLike(object):
         def __init__(self, target):
             self._target = target
             self.write = target.write
+            self.tell = target.tell
+            self.seek = target.seek
             self.closed = False
 
         def close(self):
@@ -267,8 +314,12 @@ class SimpleFileLikeXmlFileTestCase(_XmlFileTestCaseBase):
         return self._target.getvalue()
 
     def _parse_file(self):
+        pos = self._file.tell()
         self._target.seek(0)
-        return etree.parse(self._target)
+        try:
+            return etree.parse(self._target)
+        finally:
+            self._target.seek(pos)
 
     def test_filelike_not_closing(self):
         with etree.xmlfile(self._file) as xf:
@@ -284,12 +335,58 @@ class SimpleFileLikeXmlFileTestCase(_XmlFileTestCaseBase):
         self._file = None  # prevent closing in tearDown()
 
 
+class HtmlFileTestCase(_XmlFileTestCaseBase):
+    def setUp(self):
+        self._file = BytesIO()
+
+    def test_void_elements(self):
+        # http://www.w3.org/TR/html5/syntax.html#elements-0
+        void_elements = set([
+            "area", "base", "br", "col", "embed", "hr", "img",
+            "input", "keygen", "link", "meta", "param",
+            "source", "track", "wbr"
+        ])
+
+        # FIXME: These don't get serialized as void elements.
+        void_elements.difference_update([
+            'area', 'embed', 'keygen', 'source', 'track', 'wbr'
+        ])
+
+        for tag in sorted(void_elements):
+            with etree.htmlfile(self._file) as xf:
+                xf.write(etree.Element(tag))
+            self.assertXml('<%s>' % tag)
+            self._file = BytesIO()
+
+    def test_write_declaration(self):
+        with etree.htmlfile(self._file) as xf:
+            try:
+                xf.write_declaration()
+            except etree.LxmlSyntaxError:
+                self.assertTrue(True)
+            else:
+                self.assertTrue(False)
+            xf.write(etree.Element('html'))
+
+    def test_write_namespaced_element(self):
+        with etree.htmlfile(self._file) as xf:
+            xf.write(etree.Element('{some_ns}some_tag'))
+        self.assertXml('<ns0:some_tag xmlns:ns0="some_ns"></ns0:some_tag>')
+
+    def test_open_namespaced_element(self):
+        with etree.htmlfile(self._file) as xf:
+            with xf.element("{some_ns}some_tag"):
+                pass
+        self.assertXml('<ns0:some_tag xmlns:ns0="some_ns"></ns0:some_tag>')
+
+
 def test_suite():
     suite = unittest.TestSuite()
     suite.addTests([unittest.makeSuite(BytesIOXmlFileTestCase),
                     unittest.makeSuite(TempXmlFileTestCase),
                     unittest.makeSuite(TempPathXmlFileTestCase),
                     unittest.makeSuite(SimpleFileLikeXmlFileTestCase),
+                    unittest.makeSuite(HtmlFileTestCase),
                     ])
     return suite
 

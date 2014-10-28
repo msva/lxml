@@ -9,13 +9,13 @@ for IO related test cases.
 """
 
 import unittest
-import os, re, tempfile, copy, operator, gc, sys
+import os, re, tempfile, copy, operator, sys
 
 this_dir = os.path.dirname(__file__)
 if this_dir not in sys.path:
     sys.path.insert(0, this_dir) # needed for Py3
 
-from common_imports import StringIO, BytesIO, etree
+from common_imports import BytesIO, etree
 from common_imports import ElementTree, cElementTree, ET_VERSION, CET_VERSION
 from common_imports import filter_by_version, fileInTestDir, canonicalize, HelperTestCase
 from common_imports import _str, _bytes, unicode, next
@@ -2305,13 +2305,32 @@ class _ETreeTestCaseBase(HelperTestCase):
         s = [e, f]
         a[99:] = s
         self.assertEqual(
-            [a, b, e, f],
+            [b, c, e, f],
             list(a))
 
         s = [g, h]
         a[:0] = s
         self.assertEqual(
-            [g, h, a, b, e, f],
+            [g, h, b, c, e, f],
+            list(a))
+
+    def test_setslice_end_exact(self):
+        Element = self.etree.Element
+        SubElement = self.etree.SubElement
+
+        a = Element('a')
+        b = SubElement(a, 'b')
+        c = SubElement(a, 'c')
+        d = SubElement(a, 'd')
+
+        e = Element('e')
+        f = Element('f')
+        g = Element('g')
+
+        s = [e, f, g]
+        a[3:] = s
+        self.assertEqual(
+            [b, c, d, e, f, g],
             list(a))
 
     def test_setslice_single(self):
@@ -2388,25 +2407,6 @@ class _ETreeTestCaseBase(HelperTestCase):
             [b, x, y, c, d],
             list(a))
 
-    def test_setslice_end(self):
-        Element = self.etree.Element
-        SubElement = self.etree.SubElement
-
-        a = Element('a')
-        b = SubElement(a, 'b')
-        c = SubElement(a, 'c')
-        d = SubElement(a, 'd')
-
-        e = Element('e')
-        f = Element('f')
-        g = Element('g')
-
-        s = [e, f, g]
-        a[3:] = s
-        self.assertEqual(
-            [b, c, d, e, f, g],
-            list(a))
-        
     def test_setslice_empty(self):
         Element = self.etree.Element
 

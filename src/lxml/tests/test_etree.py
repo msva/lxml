@@ -233,6 +233,16 @@ class ETreeOnlyTestCase(HelperTestCase):
         root.set("attr", "TEST")
         self.assertEqual("TEST", root.get("attr"))
 
+    def test_attribute_set_nonstring(self):
+        # ElementTree accepts arbitrary attribute values
+        # lxml.etree allows only strings
+        Element = self.etree.Element
+
+        root = Element("root")
+        root.set("attr", "TEST")
+        self.assertEqual("TEST", root.get("attr"))
+        self.assertRaises(TypeError, root.set, "newattr", 5)
+
     def test_attrib_and_keywords(self):
         Element = self.etree.Element
 
@@ -566,16 +576,6 @@ class ETreeOnlyTestCase(HelperTestCase):
         root2 = copy.deepcopy(tree1.getroot())
         self.assertEqual(_bytes("<test/>"),
                           tostring(root2))
-
-    def test_attribute_set(self):
-        # ElementTree accepts arbitrary attribute values
-        # lxml.etree allows only strings
-        Element = self.etree.Element
-
-        root = Element("root")
-        root.set("attr", "TEST")
-        self.assertEqual("TEST", root.get("attr"))
-        self.assertRaises(TypeError, root.set, "newattr", 5)
 
     def test_parse_remove_comments(self):
         fromstring = self.etree.fromstring
@@ -1285,7 +1285,10 @@ class ETreeOnlyTestCase(HelperTestCase):
 
         class MyResolver(self.etree.Resolver):
             def resolve(self, url, id, context):
-                assertEqual(url, fileUrlInTestDir(test_url))
+                expected = fileUrlInTestDir(test_url)
+                url = url.replace('file://', 'file:')  # depends on libxml2 version
+                expected = expected.replace('file://', 'file:')
+                assertEqual(url, expected)
                 return self.resolve_filename(
                     fileUrlInTestDir('test.dtd'), context)
 
@@ -1542,6 +1545,48 @@ class ETreeOnlyTestCase(HelperTestCase):
         root[0].addprevious(root[1])
         self.assertEqual(['b', 'a'],
                           [c.tag for c in root])
+
+    def test_addnext_cycle(self):
+        Element = self.etree.Element
+        SubElement = self.etree.SubElement
+        root = Element('root')
+        a = SubElement(root, 'a')
+        b = SubElement(a, 'b')
+        # appending parent as sibling is forbidden
+        self.assertRaises(ValueError, b.addnext, a)
+        self.assertEqual(['a'], [c.tag for c in root])
+        self.assertEqual(['b'], [c.tag for c in a])
+
+    def test_addprevious_cycle(self):
+        Element = self.etree.Element
+        SubElement = self.etree.SubElement
+        root = Element('root')
+        a = SubElement(root, 'a')
+        b = SubElement(a, 'b')
+        # appending parent as sibling is forbidden
+        self.assertRaises(ValueError, b.addprevious, a)
+        self.assertEqual(['a'], [c.tag for c in root])
+        self.assertEqual(['b'], [c.tag for c in a])
+
+    def test_addnext_cycle_long(self):
+        Element = self.etree.Element
+        SubElement = self.etree.SubElement
+        root = Element('root')
+        a = SubElement(root, 'a')
+        b = SubElement(a, 'b')
+        c = SubElement(b, 'c')
+        # appending parent as sibling is forbidden
+        self.assertRaises(ValueError, c.addnext, a)
+
+    def test_addprevious_cycle_long(self):
+        Element = self.etree.Element
+        SubElement = self.etree.SubElement
+        root = Element('root')
+        a = SubElement(root, 'a')
+        b = SubElement(a, 'b')
+        c = SubElement(b, 'c')
+        # appending parent as sibling is forbidden
+        self.assertRaises(ValueError, c.addprevious, a)
 
     def test_addprevious_noops(self):
         Element = self.etree.Element
@@ -2846,18 +2891,6 @@ class ETreeOnlyTestCase(HelperTestCase):
         self.assertEqual(len(root.findall(".//xx:*", namespaces=nsmap)), 1)
         self.assertEqual(len(root.findall(".//b", namespaces=nsmap)), 2)
 
-    def test_findall_different_nsmaps(self):
-        XML = self.etree.XML
-        root = XML(_bytes('<a xmlns:x="X" xmlns:y="Y"><x:b><c/></x:b><b/><c><x:b/><b/></c><y:b/></a>'))
-        nsmap = {'xx': 'X'}
-        self.assertEqual(len(root.findall(".//xx:b", namespaces=nsmap)), 2)
-        self.assertEqual(len(root.findall(".//xx:*", namespaces=nsmap)), 2)
-        self.assertEqual(len(root.findall(".//b", namespaces=nsmap)), 2)
-        nsmap = {'xx': 'Y'}
-        self.assertEqual(len(root.findall(".//xx:b", namespaces=nsmap)), 1)
-        self.assertEqual(len(root.findall(".//xx:*", namespaces=nsmap)), 1)
-        self.assertEqual(len(root.findall(".//b", namespaces=nsmap)), 2)
-
     def test_findall_syntax_error(self):
         XML = self.etree.XML
         root = XML(_bytes('<a><b><c/></b><b/><c><b/><b/></c><b/></a>'))
@@ -3700,6 +3733,37 @@ class ETreeOnlyTestCase(HelperTestCase):
         del el1, el2
         gc.collect()
         # not really testing anything here, but it shouldn't crash
+
+    def test_proxy_collect_siblings(self):
+        root = etree.Element('parent')
+        c1 = etree.SubElement(root, 'child1')
+        c2 = etree.SubElement(root, 'child2')
+
+        root.remove(c1)
+        root.remove(c2)
+        c1.addnext(c2)
+        del c1
+        # trigger deallocation attempt of c1
+        c2.getprevious()
+        # make sure it wasn't deallocated
+        self.assertEqual('child1', c2.getprevious().tag)
+
+    def test_proxy_collect_siblings_text(self):
+        root = etree.Element('parent')
+        c1 = etree.SubElement(root, 'child1')
+        c2 = etree.SubElement(root, 'child2')
+
+        root.remove(c1)
+        root.remove(c2)
+        c1.addnext(c2)
+        c1.tail = 'abc'
+        c2.tail = 'xyz'
+        del c1
+        # trigger deallocation attempt of c1
+        c2.getprevious()
+        # make sure it wasn't deallocated
+        self.assertEqual('child1', c2.getprevious().tag)
+        self.assertEqual('abc', c2.getprevious().tail)
 
     # helper methods
 

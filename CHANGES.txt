@@ -5,8 +5,26 @@ lxml changelog
 Latest changes
 ==================
 
+* New ``htmlfile`` HTML generator to accompany the incremental ``xmlfile``
+  serialisation API.  Patch by Burak Arslan.
+
+
+3.4.0 (2014-09-10)
+==================
+
 Features added
 --------------
+
+* ``xmlfile(buffered=False)`` disables output buffering and flushes the
+  content after each API operation (starting/ending element blocks or writes).
+  A new method ``xf.flush()`` can alternatively be used to explicitly flush
+  the output.
+
+* ``lxml.html.document_fromstring`` has a new option ``ensure_head_body=True``
+  which will add an empty head and/or body element to the result document if
+  missing.
+
+* ``lxml.html.iterlinks`` now returns links inside meta refresh tags.
 
 * New ``XMLParser`` option ``collect_ids=False`` to disable ID hash table
   creation.  This can substantially speed up parsing of documents with many
@@ -41,6 +59,20 @@ Other changes
 
 * Requires libxml2 2.7.0 or later and libxslt 1.1.23 or later,
   use lxml 3.3.x with older versions.
+
+
+3.3.6 (2014-08-28)
+==================
+
+Bugs fixed
+----------
+
+* Prevent tree cycle creation when adding Elements as siblings.
+
+* LP#1361948: crash when deallocating Element siblings without parent.
+
+* LP#1354652: crash when traversing internally loaded documents in XSLT
+  extension functions.
 
 
 3.3.5 (2014-04-18)
