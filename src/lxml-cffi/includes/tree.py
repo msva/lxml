@@ -1,9 +1,5 @@
-import cffi
+from .cffi_base import ffi
 
-LXML_VERSION_STRING = "3.0.2"  # XXX AFA read it from $ROOT/version.txt
-LIBXML_VERSION = 20700  # XXX AFA FIXME
-
-ffi = cffi.FFI()
 ffi.cdef("""
     typedef unsigned char xmlChar;
     xmlChar * xmlStrdup(const xmlChar *cur);
@@ -487,20 +483,3 @@ ffi.cdef("""
 					 const xmlChar *base);
 
 """)
-
-libxml = ffi.verify("""
-    #include "libxml/chvalid.h"
-    #include "libxml/tree.h"
-    #include "libxml/uri.h"
-    #include "libxml/HTMLtree.h"
-""",
-include_dirs=['/usr/include/libxml2'],
-libraries=['xml2'])
-
-def init():
-    for name in dir(libxml):
-        if name.startswith(('xml', 'html', 'XML_')):
-            globals()[name] = getattr(libxml, name)
-
-init()
-

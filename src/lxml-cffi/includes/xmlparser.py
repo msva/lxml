@@ -1,9 +1,5 @@
-import cffi
-from . import tree, xmlerror
+from .cffi_base import ffi
 
-ffi = cffi.FFI()
-ffi.include(tree.ffi)
-ffi.include(xmlerror.ffi)
 ffi.cdef("""
     #define XML_PARSE_RECOVER ...  // recover on errors
     #define XML_PARSE_NOENT ...  // substitute entities
@@ -27,6 +23,9 @@ ffi.cdef("""
     #define XML_PARSE_OLD10 ...  // parse using XML-1.0 before update 5
     #define XML_PARSE_NOBASEFIX ...  // do not fixup XINCLUDE xml:base uris
     #define XML_PARSE_HUGE ...  // relax any hardcoded limit from the parser
+
+    // libxml2 2.9.0+ only:
+    #define XML_PARSE_BIG_LINES ... //store big lines numbers in text PSVI field
 
     // Init / Cleanup
 
@@ -233,17 +232,5 @@ ffi.cdef("""
 					 const xmlChar *SystemID);
     xmlDtdPtr 	xmlIOParseDTD		(xmlSAXHandlerPtr sax,
 					 xmlParserInputBufferPtr input,
-					 xmlCharEncoding enc);""")
-libxml = ffi.verify("""
-    #include "libxml/parser.h"
-    #include "libxml/parserInternals.h"
-""",
-include_dirs=['/usr/include/libxml2'],
-libraries=['xml2'])
-
-#  libxml2 2.9.0+ only:
-XML_PARSE_BIG_LINES = 4194304 #  Store big lines numbers in text PSVI field
-
-for name in dir(libxml):
-    if name.startswith(('XML_', 'xml')):
-        globals()[name] = getattr(libxml, name)
+					 xmlCharEncoding enc);
+""")

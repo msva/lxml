@@ -1,11 +1,7 @@
-import cffi
-from . import tree
+from .cffi_base import ffi
 
-ffi = cffi.FFI()
-ffi.include(tree.ffi)
 ffi.cdef("""
-    typedef struct _xmlNodeSet xmlNodeSet;
-    typedef xmlNodeSet *xmlNodeSetPtr;
+    // xmlNodeSetPtr comes from xpath
 
     int xmlC14NDocSaveTo	(xmlDocPtr doc,
 					 xmlNodeSetPtr nodes,
@@ -28,15 +24,3 @@ ffi.cdef("""
 					 int with_comments,
 					 xmlChar **doc_txt_ptr);
 """)
-
-libxml = ffi.verify("""
-    #include "libxml/parser.h"
-    #include "libxml/c14n.h"
-""",
-include_dirs=['/usr/include/libxml2'],
-libraries=['xml2'])
-
-for name in dir(libxml):
-    if name.startswith('xml'):
-        globals()[name] = getattr(libxml, name)
-

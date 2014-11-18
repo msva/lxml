@@ -1,9 +1,5 @@
-import cffi
+from .cffi_base import ffi
 
-from . import xmlparser
-
-ffi = cffi.FFI()
-ffi.include(xmlparser.ffi)
 ffi.cdef("""
      /* The set of XPath error codes. */
     typedef enum {
@@ -145,16 +141,3 @@ ffi.cdef("""
     void 	xmlXPathNodeSetAdd		(xmlNodeSetPtr cur,
 						 xmlNodePtr val);
 """)
-
-libxml = ffi.verify("""
-    #include "libxml/xpath.h"
-    #include "libxml/xpathInternals.h"
-""",
-include_dirs=['/usr/include/libxml2'],
-libraries=['xml2'])
-
-for name in dir(libxml):
-    if name.startswith(('xml', 'XPATH_')):
-        globals()[name] = getattr(libxml, name)
-    if name in ("valuePush", "valuePop"):
-        globals()[name] = getattr(libxml, name)

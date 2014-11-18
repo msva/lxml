@@ -1,8 +1,5 @@
-import cffi
-from . import xmlparser
+from .cffi_base import ffi
 
-ffi = cffi.FFI()
-ffi.include(xmlparser.ffi)
 ffi.cdef("""
     /*
      * Most of the back-end structures from XML and HTML are shared.
@@ -61,15 +58,3 @@ ffi.cdef("""
 						 int terminate);
 
 """)
-
-libxml = ffi.verify("""
-    #include "libxml/HTMLparser.h"
-    #include "libxml/HTMLtree.h"
-""",
-include_dirs=['/usr/include/libxml2'],
-libraries=['xml2'])
-for name in dir(libxml):
-    if name.startswith(('html', 'HTML_PARSE')):
-        globals()[name] = getattr(libxml, name)
-
-htmlDefaultSAXHandler = libxml.htmlDefaultSAXHandler

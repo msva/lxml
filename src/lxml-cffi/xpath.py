@@ -14,7 +14,7 @@ from .apihelpers import _utf8, _documentOrRaise, _rootNodeOrRaise
 from .apihelpers import _assertValidNode, _assertValidDoc
 from .xslt import LIBXSLT_VERSION
 from .includes import xslt
-from .includes.xpath import ffi, libxml as xpath
+from .includes import ffi, xpath
 from .proxy import _fakeRootDoc, _destroyFakeDoc
 from . import python
 

@@ -1,9 +1,5 @@
-import cffi
-from . import tree, xmlerror
+from .cffi_base import ffi
 
-ffi = cffi.FFI()
-ffi.include(xmlerror.ffi)
-ffi.include(tree.ffi)
 ffi.cdef("""
     typedef struct _xmlSchematron xmlSchematron;
     typedef xmlSchematron *xmlSchematronPtr;
@@ -42,16 +38,3 @@ ffi.cdef("""
 					  void *ctx);
 
 """)
-
-libxml = ffi.verify("""
-    #include "libxml/schematron.h"
-""",
-include_dirs=['/usr/include/libxml2'],
-libraries=['xml2'])
-
-def init():
-    for name in dir(libxml):
-        if name.startswith(('xml', 'XML')):
-            globals()[name] = getattr(libxml, name)
-
-init()

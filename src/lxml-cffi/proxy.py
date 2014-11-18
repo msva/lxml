@@ -1,6 +1,6 @@
 from .includes import tree
 from .includes.etree_defs import FOR_EACH_ELEMENT_FROM, FOR_EACH_FROM
-from .includes.tree import ffi
+from .includes import ffi
 from .parser import _copyDoc
 
 from .apihelpers import _removeText

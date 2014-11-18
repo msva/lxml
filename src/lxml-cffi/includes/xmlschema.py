@@ -1,8 +1,5 @@
-import cffi
-from . import tree, xmlerror, xmlparser
+from .cffi_base import ffi
 
-ffi = cffi.FFI()
-ffi.include(xmlparser.ffi)
 ffi.cdef("""
     typedef struct _xmlSchemaParserCtxt xmlSchemaParserCtxt;
     typedef xmlSchemaParserCtxt *xmlSchemaParserCtxtPtr;
@@ -50,16 +47,3 @@ ffi.cdef("""
     int     xmlSchemaSAXUnplug		(xmlSchemaSAXPlugPtr plug);
 
 """)
-
-libxml = ffi.verify("""
-    #include "libxml/xmlschemas.h"
-""",
-include_dirs=['/usr/include/libxml2'],
-libraries=['xml2'])
-
-def init():
-    for name in dir(libxml):
-        if name.startswith(('xml', 'XML')):
-            globals()[name] = getattr(libxml, name)
-
-init()

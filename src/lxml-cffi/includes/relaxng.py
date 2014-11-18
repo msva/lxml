@@ -1,11 +1,5 @@
-import cffi
+from .cffi_base import ffi
 
-from . import tree
-from . import xmlerror
-
-ffi = cffi.FFI()
-ffi.include(tree.ffi)
-ffi.include(xmlerror.ffi)
 ffi.cdef("""
     typedef struct _xmlRelaxNG xmlRelaxNG;
     typedef xmlRelaxNG *xmlRelaxNGPtr;
@@ -34,14 +28,3 @@ ffi.cdef("""
     void 	    xmlRelaxNGFreeValidCtxt	(xmlRelaxNGValidCtxtPtr ctxt);
 
 """)
-
-libxml = ffi.verify("""
-    #include "libxml/relaxng.h"
-""",
-include_dirs=['/usr/include/libxml2'],
-libraries=['xml2'])
-
-for name in dir(libxml):
-    if name.startswith('xml'):
-        globals()[name] = getattr(libxml, name)
-

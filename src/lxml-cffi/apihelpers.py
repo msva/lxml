@@ -4,7 +4,7 @@ from .includes.etree_defs import _isString, _getNs, _isElement
 from .includes.etree_defs import FOR_EACH_ELEMENT_FROM
 from .includes import tree
 from . import python
-from . import uri
+from .includes import uri
 from collections import OrderedDict
 import sys
 import re

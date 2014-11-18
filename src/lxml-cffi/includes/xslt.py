@@ -1,8 +1,5 @@
-import cffi
-from . import tree, xpath
+from .cffi_base import ffi
 
-ffi = cffi.FFI()
-ffi.include(xpath.ffi)
 ffi.cdef("""
     const int xsltLibxsltVersion;
 
@@ -179,29 +176,3 @@ ffi.cdef("""
     int exsltStrXpathCtxtRegister (xmlXPathContextPtr ctxt,
                                                      const xmlChar *prefix);
 """)
-
-libxslt = ffi.verify("""
-    #include "libxslt/xsltutils.h"
-    #include "libxslt/security.h"
-    #include "libxslt/transform.h"
-    #include "libxslt/extensions.h"
-    #include "libxslt/documents.h"
-    #include "libxslt/variables.h"
-    #include "libxslt/extra.h"
-    #include "libexslt/exslt.h"
-""",
-# XXX use /usr/bin/xslt-config
-include_dirs=['/usr/include/libxml2'],
-libraries=['xslt', 'exslt', 'xml2'],
-library_dirs=['/usr/lib/x86_64-linux-gnu'])
-
-xslt = libxslt
-
-for name in dir(libxslt):
-    if name.startswith(('xslt', 'exslt', 'XSLT_')):
-        globals()[name] = getattr(libxslt, name)
-    if name.startswith('EXSLT_'):
-        globals()[name] = ffi.string(getattr(libxslt, name))
-
-# Hum, function pointers are not in dir(libxslt)
-xsltDocDefaultLoader = libxslt.xsltDocDefaultLoader
