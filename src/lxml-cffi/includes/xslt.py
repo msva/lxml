@@ -2,7 +2,6 @@ import cffi
 from . import tree, xpath
 
 ffi = cffi.FFI()
-ffi.include(tree.ffi)
 ffi.include(xpath.ffi)
 ffi.cdef("""
     const int xsltLibxsltVersion;

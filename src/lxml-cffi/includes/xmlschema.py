@@ -2,8 +2,6 @@ import cffi
 from . import tree, xmlerror, xmlparser
 
 ffi = cffi.FFI()
-ffi.include(xmlerror.ffi)
-ffi.include(tree.ffi)
 ffi.include(xmlparser.ffi)
 ffi.cdef("""
     typedef struct _xmlSchemaParserCtxt xmlSchemaParserCtxt;
