@@ -12,7 +12,7 @@ except ImportError:
 
 EXT_MODULES = ["lxml.etree", "lxml.objectify"]
 CFFI_MODULES = [
-    "uri", "xmlerror", "includes.c14n", "includes.dtdvalid",
+    "includes.uri", "xmlerror", "includes.c14n", "includes.dtdvalid",
     "includes.htmlparser", "includes.relaxng", "includes.schematron",
     "includes.tree", "includes.xinclude", "includes.xmlerror",
     "includes.xmlschema", "includes.xmlparser", "includes.xpath",
